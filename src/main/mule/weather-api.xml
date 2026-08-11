@@ -226,8 +226,12 @@ output application/json
 
     <flow name="weather-api-main">
         <http:listener config-ref="HTTP_Listener_config" path="/api/weather" allowedMethods="GET" doc:name="GET /api/weather">
-            <http:response statusCode="#[vars.httpStatus default 200]" />
-            <http:error-response statusCode="#[vars.httpStatus default 500]" />
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+            </http:error-response>
         </http:listener>
 
         <ee:transform doc:name="Read city query param">
@@ -283,8 +287,12 @@ statuses[payload.error] default 500]]></ee:set-variable>
 
     <flow name="weather-compare-main">
         <http:listener config-ref="HTTP_Listener_config" path="/api/weather/compare" allowedMethods="GET" doc:name="GET /api/weather/compare">
-            <http:response statusCode="#[vars.httpStatus default 200]" />
-            <http:error-response statusCode="#[vars.httpStatus default 500]" />
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+            </http:error-response>
         </http:listener>
 
         <ee:transform doc:name="Parse cities query param">

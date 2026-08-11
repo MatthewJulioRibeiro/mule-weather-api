@@ -23,7 +23,7 @@ No API keys anywhere — [Open-Meteo](https://open-meteo.com) is free and keyles
 curl "https://mule-demo.matheusribeiro.dev.br/api/weather?city=Indaiatuba"
 ```
 
-Interactive API docs (Swagger UI, self-hosted, no Anypoint Exchange dependency): [mule-demo.matheusribeiro.dev.br/docs/](https://mule-demo.matheusribeiro.dev.br/docs/) — spec source at [`docs/openapi.yaml`](docs/openapi.yaml).
+Interactive API docs (Swagger UI, self-hosted, no Anypoint Exchange dependency): [mule-demo.matheusribeiro.dev.br/docs/](https://mule-demo.matheusribeiro.dev.br/docs/) — spec source at [`docs/openapi.yaml`](docs/openapi.yaml). CORS is open (`Access-Control-Allow-Origin: *`) so it can also be called straight from a browser — see the live demo widget on [matheusribeiro.dev.br](https://matheusribeiro.dev.br).
 
 ```json
 {

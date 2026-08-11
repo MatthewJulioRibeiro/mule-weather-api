@@ -13,7 +13,7 @@
          (geocoding -> forecast) and reshapes the result with DataWeave. -->
 
     <http:listener-config name="HTTP_Listener_config">
-        <http:listener-connection host="0.0.0.0" port="8081" />
+        <http:listener-connection host="0.0.0.0" port="8081" protocol="HTTP" />
     </http:listener-config>
 
     <http:request-config name="Geocoding_API_config" basePath="/v1">
@@ -35,7 +35,7 @@
                 <ee:set-variable variableName="city"><![CDATA[%dw 2.0
 output text/plain
 ---
-(attributes.queryParams.city default '') trim]]></ee:set-variable>
+trim(attributes.queryParams.city default '')]]></ee:set-variable>
             </ee:variables>
         </ee:transform>
 

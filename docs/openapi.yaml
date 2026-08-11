@@ -1,0 +1,141 @@
+openapi: 3.0.3
+info:
+  title: Weather API (Mule 4 demo)
+  description: >
+    Portfolio demo built with Mule 4: a single HTTP Listener orchestrates two
+    public, keyless Open-Meteo endpoints (geocoding, then forecast) and
+    reshapes the result with DataWeave 2.0. Source: see the repository this
+    documentation ships with.
+  version: "1.0.0"
+  license:
+    name: Personal portfolio demo (non-commercial)
+servers:
+  - url: https://mule-demo.matheusribeiro.dev.br
+paths:
+  /api/weather:
+    get:
+      summary: Get current weather for a city
+      description: >
+        Resolves the given city name to coordinates (Open-Meteo geocoding),
+        then fetches current conditions for those coordinates (Open-Meteo
+        forecast) and returns a reshaped, bilingual (pt/en) response.
+      parameters:
+        - name: city
+          in: query
+          required: true
+          description: City name to look up, e.g. "Indaiatuba" or "Sao Paulo".
+          schema:
+            type: string
+          example: Indaiatuba
+      responses:
+        "200":
+          description: Weather found for the given city.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeatherResponse"
+              example:
+                city: Indaiatuba
+                country: Brazil
+                coordinates:
+                  latitude: -23.09
+                  longitude: -47.21
+                temperatureCelsius: 24.3
+                windSpeedKmh: 8.6
+                description:
+                  pt: Céu limpo
+                  en: Clear sky
+                observedAt: "2026-08-11T14:00"
+        "400":
+          description: Missing the required `city` query param.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: MISSING_CITY
+                message: "Informe o parâmetro 'city', ex: ?city=Sao Paulo"
+        "404":
+          description: City not found by the geocoding lookup.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: CITY_NOT_FOUND
+                message: "Cidade nao encontrada: 'Atlantis'"
+        "502":
+          description: Upstream Open-Meteo API unreachable or timed out.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: UPSTREAM_UNAVAILABLE
+                message: Servico de clima temporariamente indisponivel
+        "500":
+          description: Unexpected error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: INTERNAL_ERROR
+                message: Erro inesperado ao processar a requisicao
+components:
+  schemas:
+    WeatherResponse:
+      type: object
+      required:
+        - city
+        - coordinates
+        - temperatureCelsius
+        - windSpeedKmh
+        - description
+        - observedAt
+      properties:
+        city:
+          type: string
+        country:
+          type: string
+        coordinates:
+          type: object
+          properties:
+            latitude:
+              type: number
+              format: double
+            longitude:
+              type: number
+              format: double
+        temperatureCelsius:
+          type: number
+          format: double
+        windSpeedKmh:
+          type: number
+          format: double
+        description:
+          type: object
+          description: Human-readable weather condition, pt-BR and English.
+          properties:
+            pt:
+              type: string
+            en:
+              type: string
+        observedAt:
+          type: string
+          description: Local timestamp (no timezone offset) as reported by Open-Meteo.
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          enum:
+            - MISSING_CITY
+            - CITY_NOT_FOUND
+            - UPSTREAM_UNAVAILABLE
+            - INTERNAL_ERROR
+        message:
+          type: string

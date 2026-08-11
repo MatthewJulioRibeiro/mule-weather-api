@@ -6,7 +6,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # MUnit is not run here: the public "CE" test runtime that MUnit
+      # downloads from Maven doesn't ship the DataWeave/ee-core module this
+      # flow depends on (only the licensed EE distribution does, which needs
+      # Nexus EE credentials tied to a paid Mule support entitlement). The
+      # MUnit suite still lives in src/test/munit and runs fine locally
+      # against the real runtime on the VM -- see README.md.
+      - name: Build and package (compile check)
+        run: mvn -B package -DskipTests
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

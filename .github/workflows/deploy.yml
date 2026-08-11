@@ -36,6 +36,6 @@ jobs:
             docker run -d --name mule-weather-api-app \
               -p 127.0.0.1:8081:8081 \
               --restart unless-stopped \
-              --memory=768m \
+              --memory=2g \
               mule-weather-api
           '

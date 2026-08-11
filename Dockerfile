@@ -1,7 +1,7 @@
 # Stage 1: package the Mule application into a deployable jar
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /app
-COPY pom.xml .
+COPY pom.xml mule-artifact.json ./
 COPY src ./src
 RUN mvn -q -B clean package -DskipTests
 

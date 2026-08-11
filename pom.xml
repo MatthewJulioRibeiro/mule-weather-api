@@ -32,7 +32,7 @@
         <dependency>
             <groupId>org.mule.connectors</groupId>
             <artifactId>mule-http-connector</artifactId>
-            <version>1.12.0</version>
+            <version>1.11.3</version>
             <classifier>mule-plugin</classifier>
         </dependency>
     </dependencies>

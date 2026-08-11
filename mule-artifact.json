@@ -1,0 +1,5 @@
+{
+  "minMuleVersion": "4.9.0",
+  "requiredProduct": "MULE",
+  "configs": ["weather-api.xml"]
+}

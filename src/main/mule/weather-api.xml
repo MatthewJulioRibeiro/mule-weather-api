@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- Portfolio demo: orchestrates two public, keyless Open-Meteo endpoints
+         (geocoding -> forecast) and reshapes the result with DataWeave. -->
+
+    <http:listener-config name="HTTP_Listener_config">
+        <http:listener-connection host="0.0.0.0" port="8081" />
+    </http:listener-config>
+
+    <http:request-config name="Geocoding_API_config" basePath="/v1">
+        <http:request-connection host="geocoding-api.open-meteo.com" port="443" protocol="HTTPS" />
+    </http:request-config>
+
+    <http:request-config name="Forecast_API_config" basePath="/v1">
+        <http:request-connection host="api.open-meteo.com" port="443" protocol="HTTPS" />
+    </http:request-config>
+
+    <flow name="weather-api-main">
+        <http:listener config-ref="HTTP_Listener_config" path="/api/weather" allowedMethods="GET" doc:name="GET /api/weather">
+            <http:response statusCode="#[vars.httpStatus default 200]" />
+            <http:error-response statusCode="#[vars.httpStatus default 500]" />
+        </http:listener>
+
+        <ee:transform doc:name="Read city query param">
+            <ee:variables>
+                <ee:set-variable variableName="city"><![CDATA[%dw 2.0
+output text/plain
+---
+(attributes.queryParams.city default '') trim]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <choice doc:name="City provided?">
+            <when expression="#[isEmpty(vars.city)]">
+                <raise-error type="WEATHER:MISSING_CITY" description="Query param 'city' is required" />
+            </when>
+        </choice>
+
+        <http:request method="GET" config-ref="Geocoding_API_config" path="/search" doc:name="Geocode city">
+            <http:query-params><![CDATA[#[{
+                name: vars.city,
+                count: 1,
+                language: 'pt',
+                format: 'json'
+            }]]]></http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Extract coordinates">
+            <ee:variables>
+                <ee:set-variable variableName="location"><![CDATA[%dw 2.0
+output application/json
+---
+payload.results[0] default null]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <choice doc:name="Location found?">
+            <when expression="#[vars.location == null]">
+                <raise-error type="WEATHER:CITY_NOT_FOUND" description="City not found in geocoding results" />
+            </when>
+        </choice>
+
+        <http:request method="GET" config-ref="Forecast_API_config" path="/forecast" doc:name="Get current forecast">
+            <http:query-params><![CDATA[#[{
+                latitude: vars.location.latitude,
+                longitude: vars.location.longitude,
+                current: 'temperature_2m,weather_code,wind_speed_10m',
+                timezone: 'auto'
+            }]]]></http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Build friendly response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var weatherDescriptions = {
+    "0": { pt: "Céu limpo", en: "Clear sky" },
+    "1": { pt: "Predominantemente limpo", en: "Mainly clear" },
+    "2": { pt: "Parcialmente nublado", en: "Partly cloudy" },
+    "3": { pt: "Nublado", en: "Overcast" },
+    "45": { pt: "Neblina", en: "Fog" },
+    "48": { pt: "Neblina com geada", en: "Depositing rime fog" },
+    "51": { pt: "Garoa leve", en: "Light drizzle" },
+    "53": { pt: "Garoa moderada", en: "Moderate drizzle" },
+    "55": { pt: "Garoa forte", en: "Dense drizzle" },
+    "61": { pt: "Chuva leve", en: "Slight rain" },
+    "63": { pt: "Chuva moderada", en: "Moderate rain" },
+    "65": { pt: "Chuva forte", en: "Heavy rain" },
+    "71": { pt: "Neve leve", en: "Slight snow" },
+    "73": { pt: "Neve moderada", en: "Moderate snow" },
+    "75": { pt: "Neve forte", en: "Heavy snow" },
+    "80": { pt: "Pancadas de chuva leves", en: "Slight rain showers" },
+    "81": { pt: "Pancadas de chuva moderadas", en: "Moderate rain showers" },
+    "82": { pt: "Pancadas de chuva violentas", en: "Violent rain showers" },
+    "95": { pt: "Trovoada", en: "Thunderstorm" },
+    "96": { pt: "Trovoada com granizo leve", en: "Thunderstorm with slight hail" },
+    "99": { pt: "Trovoada com granizo forte", en: "Thunderstorm with heavy hail" }
+}
+var code = payload.current.weather_code as String default "0"
+var desc = weatherDescriptions[code] default { pt: "Desconhecido", en: "Unknown" }
+---
+{
+    city: vars.location.name,
+    country: vars.location.country default "",
+    coordinates: {
+        latitude: vars.location.latitude,
+        longitude: vars.location.longitude
+    },
+    temperatureCelsius: payload.current.temperature_2m,
+    windSpeedKmh: payload.current.wind_speed_10m,
+    description: desc,
+    observedAt: payload.current.time
+}]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="httpStatus"><![CDATA[200]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <error-handler>
+            <on-error-continue type="WEATHER:MISSING_CITY" doc:name="Missing city param">
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: "MISSING_CITY", message: "Informe o parâmetro 'city', ex: ?city=Sao Paulo" }]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[400]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-continue>
+
+            <on-error-continue type="WEATHER:CITY_NOT_FOUND" doc:name="City not found">
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: "CITY_NOT_FOUND", message: "Cidade nao encontrada: '$(vars.city)'" }]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[404]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-continue>
+
+            <on-error-continue type="HTTP:CONNECTIVITY, HTTP:TIMEOUT" doc:name="Upstream unavailable">
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: "UPSTREAM_UNAVAILABLE", message: "Servico de clima temporariamente indisponivel" }]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[502]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-continue>
+
+            <on-error-continue type="ANY" doc:name="Unexpected error">
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: "INTERNAL_ERROR", message: "Erro inesperado ao processar a requisicao" }]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[500]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+</mule>

@@ -2,15 +2,19 @@
 <mule xmlns="http://www.mulesoft.org/schema/mule/core"
       xmlns:http="http://www.mulesoft.org/schema/mule/http"
       xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
-        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
 
-    <!-- Portfolio demo: orchestrates two public, keyless Open-Meteo endpoints
-         (geocoding -> forecast) and reshapes the result with DataWeave. -->
+    <!-- Portfolio demo: orchestrates public, keyless Open-Meteo endpoints
+         (geocoding -> forecast + air quality in parallel) and reshapes the
+         result with DataWeave. Two HTTP endpoints share one resolver
+         sub-flow: a single-city lookup and a multi-city parallel compare. -->
 
     <http:listener-config name="HTTP_Listener_config">
         <http:listener-connection host="0.0.0.0" port="8081" protocol="HTTP" />
@@ -24,63 +28,111 @@
         <http:request-connection host="api.open-meteo.com" port="443" protocol="HTTPS" />
     </http:request-config>
 
-    <flow name="weather-api-main">
-        <http:listener config-ref="HTTP_Listener_config" path="/api/weather" allowedMethods="GET" doc:name="GET /api/weather">
-            <http:response statusCode="#[vars.httpStatus default 200]" />
-            <http:error-response statusCode="#[vars.httpStatus default 500]" />
-        </http:listener>
+    <http:request-config name="AirQuality_API_config" basePath="/v1">
+        <http:request-connection host="air-quality-api.open-meteo.com" port="443" protocol="HTTPS" />
+    </http:request-config>
 
-        <ee:transform doc:name="Read city query param">
-            <ee:variables>
-                <ee:set-variable variableName="city"><![CDATA[%dw 2.0
-output text/plain
----
-trim(attributes.queryParams.city default '')]]></ee:set-variable>
-            </ee:variables>
-        </ee:transform>
+    <!-- City -> coordinates rarely changes, so geocoding lookups are cached
+         for an hour to cut down on repeat calls to the upstream API. -->
+    <ee:object-store-caching-strategy name="Geocode_Cache_Strategy" keyGenerationExpression="#[vars.city]">
+        <os:private-object-store maxEntries="200" entryTtl="60" entryTtlUnit="MINUTES" expirationInterval="10" expirationIntervalUnit="MINUTES" />
+    </ee:object-store-caching-strategy>
 
+    <!-- Resolves one city name into a full weather+air-quality reading.
+         Never raises an error to its caller: everything is normalized into
+         { city, ok, error, data } so both callers below (single lookup and
+         parallel compare) can handle a failed city without the whole
+         request/batch blowing up. -->
+    <sub-flow name="resolve-city-weather">
         <choice doc:name="City provided?">
             <when expression="#[isEmpty(vars.city)]">
-                <raise-error type="WEATHER:MISSING_CITY" description="Query param 'city' is required" />
+                <ee:transform doc:name="Missing city result">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ city: null, ok: false, error: "MISSING_CITY", data: null }]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
             </when>
-        </choice>
+            <otherwise>
+                <try doc:name="Resolve">
+                    <ee:cache doc:name="Cache geocoding result" cachingStrategy-ref="Geocode_Cache_Strategy">
+                        <until-successful maxRetries="2" millisBetweenRetries="500" doc:name="Retry geocoding">
+                            <http:request method="GET" config-ref="Geocoding_API_config" path="/search" doc:name="Geocode city">
+                                <http:query-params><![CDATA[#[{
+                                    name: vars.city,
+                                    count: 1,
+                                    language: 'pt',
+                                    format: 'json'
+                                }]]]></http:query-params>
+                            </http:request>
+                        </until-successful>
+                    </ee:cache>
 
-        <http:request method="GET" config-ref="Geocoding_API_config" path="/search" doc:name="Geocode city">
-            <http:query-params><![CDATA[#[{
-                name: vars.city,
-                count: 1,
-                language: 'pt',
-                format: 'json'
-            }]]]></http:query-params>
-        </http:request>
-
-        <ee:transform doc:name="Extract coordinates">
-            <ee:variables>
-                <ee:set-variable variableName="location"><![CDATA[%dw 2.0
+                    <ee:transform doc:name="Extract coordinates">
+                        <ee:variables>
+                            <ee:set-variable variableName="location"><![CDATA[%dw 2.0
 output application/json
 ---
 payload.results[0] default null]]></ee:set-variable>
-            </ee:variables>
-        </ee:transform>
+                        </ee:variables>
+                    </ee:transform>
 
-        <choice doc:name="Location found?">
-            <when expression="#[vars.location == null]">
-                <raise-error type="WEATHER:CITY_NOT_FOUND" description="City not found in geocoding results" />
-            </when>
-        </choice>
+                    <choice doc:name="Location found?">
+                        <when expression="#[vars.location == null]">
+                            <raise-error type="WEATHER:CITY_NOT_FOUND" description="City not found in geocoding results" />
+                        </when>
+                    </choice>
 
-        <http:request method="GET" config-ref="Forecast_API_config" path="/forecast" doc:name="Get current forecast">
-            <http:query-params><![CDATA[#[{
-                latitude: vars.location.latitude,
-                longitude: vars.location.longitude,
-                current: 'temperature_2m,weather_code,wind_speed_10m',
-                timezone: 'auto'
-            }]]]></http:query-params>
-        </http:request>
+                    <scatter-gather doc:name="Forecast + air quality, in parallel">
+                        <route>
+                            <until-successful maxRetries="2" millisBetweenRetries="500" doc:name="Retry forecast">
+                                <http:request method="GET" config-ref="Forecast_API_config" path="/forecast" doc:name="Get current forecast">
+                                    <http:query-params><![CDATA[#[{
+                                        latitude: vars.location.latitude,
+                                        longitude: vars.location.longitude,
+                                        current: 'temperature_2m,weather_code,wind_speed_10m',
+                                        timezone: 'auto'
+                                    }]]]></http:query-params>
+                                </http:request>
+                            </until-successful>
+                        </route>
+                        <route>
+                            <!-- Air quality is a nice-to-have enrichment, not
+                                 core to the response: if this route fails
+                                 (even after retrying) it degrades to null
+                                 instead of failing the whole request. -->
+                            <try doc:name="Air quality (optional)">
+                                <until-successful maxRetries="2" millisBetweenRetries="500" doc:name="Retry air quality">
+                                    <http:request method="GET" config-ref="AirQuality_API_config" path="/air-quality" doc:name="Get current air quality">
+                                        <http:query-params><![CDATA[#[{
+                                            latitude: vars.location.latitude,
+                                            longitude: vars.location.longitude,
+                                            current: 'pm10,pm2_5,european_aqi',
+                                            timezone: 'auto'
+                                        }]]]></http:query-params>
+                                    </http:request>
+                                </until-successful>
+                                <error-handler>
+                                    <on-error-continue type="ANY" doc:name="Air quality unavailable -> null">
+                                        <ee:transform>
+                                            <ee:message>
+                                                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+null]]></ee:set-payload>
+                                            </ee:message>
+                                        </ee:transform>
+                                    </on-error-continue>
+                                </error-handler>
+                            </try>
+                        </route>
+                    </scatter-gather>
 
-        <ee:transform doc:name="Build friendly response">
-            <ee:message>
-                <ee:set-payload><![CDATA[%dw 2.0
+                    <ee:transform doc:name="Build weather result">
+                        <ee:message>
+                            <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 var weatherDescriptions = {
     "0": { pt: "Céu limpo", en: "Clear sky" },
@@ -105,21 +157,162 @@ var weatherDescriptions = {
     "96": { pt: "Trovoada com granizo leve", en: "Thunderstorm with slight hail" },
     "99": { pt: "Trovoada com granizo forte", en: "Thunderstorm with heavy hail" }
 }
-var code = payload.current.weather_code as String default "0"
+var forecast = payload."0".payload
+var airQualityRaw = payload."1".payload
+var code = forecast.current.weather_code as String default "0"
 var desc = weatherDescriptions[code] default { pt: "Desconhecido", en: "Unknown" }
 ---
 {
-    city: vars.location.name,
-    country: vars.location.country default "",
-    coordinates: {
-        latitude: vars.location.latitude,
-        longitude: vars.location.longitude
-    },
-    temperatureCelsius: payload.current.temperature_2m,
-    windSpeedKmh: payload.current.wind_speed_10m,
-    description: desc,
-    observedAt: payload.current.time
+    city: vars.city,
+    ok: true,
+    error: null,
+    data: {
+        city: vars.location.name,
+        country: vars.location.country default "",
+        coordinates: {
+            latitude: vars.location.latitude,
+            longitude: vars.location.longitude
+        },
+        temperatureCelsius: forecast.current.temperature_2m,
+        windSpeedKmh: forecast.current.wind_speed_10m,
+        description: desc,
+        observedAt: forecast.current.time,
+        airQuality: if (airQualityRaw != null) {
+            pm10: airQualityRaw.current.pm10,
+            pm2_5: airQualityRaw.current.pm2_5,
+            europeanAqi: airQualityRaw.current.european_aqi
+        } else null
+    }
 }]]></ee:set-payload>
+                        </ee:message>
+                    </ee:transform>
+
+                    <error-handler>
+                        <on-error-continue type="WEATHER:CITY_NOT_FOUND" doc:name="City not found">
+                            <ee:transform>
+                                <ee:message>
+                                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ city: vars.city, ok: false, error: "CITY_NOT_FOUND", data: null }]]></ee:set-payload>
+                                </ee:message>
+                            </ee:transform>
+                        </on-error-continue>
+                        <on-error-continue type="HTTP:CONNECTIVITY, HTTP:TIMEOUT, MULE:COMPOSITE_ROUTING" doc:name="Upstream unavailable">
+                            <ee:transform>
+                                <ee:message>
+                                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ city: vars.city, ok: false, error: "UPSTREAM_UNAVAILABLE", data: null }]]></ee:set-payload>
+                                </ee:message>
+                            </ee:transform>
+                        </on-error-continue>
+                        <on-error-continue type="ANY" doc:name="Unexpected error">
+                            <ee:transform>
+                                <ee:message>
+                                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ city: vars.city, ok: false, error: "INTERNAL_ERROR", data: null }]]></ee:set-payload>
+                                </ee:message>
+                            </ee:transform>
+                        </on-error-continue>
+                    </error-handler>
+                </try>
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <flow name="weather-api-main">
+        <http:listener config-ref="HTTP_Listener_config" path="/api/weather" allowedMethods="GET" doc:name="GET /api/weather">
+            <http:response statusCode="#[vars.httpStatus default 200]" />
+            <http:error-response statusCode="#[vars.httpStatus default 500]" />
+        </http:listener>
+
+        <ee:transform doc:name="Read city query param">
+            <ee:variables>
+                <ee:set-variable variableName="city"><![CDATA[%dw 2.0
+output text/plain
+---
+trim(attributes.queryParams.city default '')]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <flow-ref name="resolve-city-weather" doc:name="Resolve city" />
+
+        <choice doc:name="Resolved OK?">
+            <when expression="#[payload.ok]">
+                <ee:transform doc:name="Unwrap successful result">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload.data]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[200]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <otherwise>
+                <ee:transform doc:name="Map error to HTTP status">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var messages = {
+    MISSING_CITY: "Informe o parâmetro 'city', ex: ?city=Sao Paulo",
+    CITY_NOT_FOUND: "Cidade nao encontrada: '$(payload.city default '')'",
+    UPSTREAM_UNAVAILABLE: "Servico de clima temporariamente indisponivel",
+    INTERNAL_ERROR: "Erro inesperado ao processar a requisicao"
+}
+---
+{ error: payload.error, message: messages[payload.error] default messages.INTERNAL_ERROR }]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus"><![CDATA[%dw 2.0
+output application/java
+var statuses = { MISSING_CITY: 400, CITY_NOT_FOUND: 404, UPSTREAM_UNAVAILABLE: 502, INTERNAL_ERROR: 500 }
+---
+statuses[payload.error] default 500]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </otherwise>
+        </choice>
+    </flow>
+
+    <flow name="weather-compare-main">
+        <http:listener config-ref="HTTP_Listener_config" path="/api/weather/compare" allowedMethods="GET" doc:name="GET /api/weather/compare">
+            <http:response statusCode="#[vars.httpStatus default 200]" />
+            <http:error-response statusCode="#[vars.httpStatus default 500]" />
+        </http:listener>
+
+        <ee:transform doc:name="Parse cities query param">
+            <ee:variables>
+                <ee:set-variable variableName="citiesList"><![CDATA[%dw 2.0
+output application/java
+---
+(attributes.queryParams.cities default '') splitBy ',' map trim($) filter not isEmpty($)]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <choice doc:name="Cities provided?">
+            <when expression="#[isEmpty(vars.citiesList)]">
+                <raise-error type="WEATHER:MISSING_CITY" description="Query param 'cities' is required" />
+            </when>
+        </choice>
+
+        <parallel-foreach collection="#[vars.citiesList]" doc:name="Resolve each city in parallel">
+            <set-variable variableName="city" value="#[payload]" doc:name="Set city for this branch" />
+            <flow-ref name="resolve-city-weather" doc:name="Resolve city" />
+        </parallel-foreach>
+
+        <ee:transform doc:name="Collect comparison results">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ results: payload.payload }]]></ee:set-payload>
             </ee:message>
             <ee:variables>
                 <ee:set-variable variableName="httpStatus"><![CDATA[200]]></ee:set-variable>
@@ -127,58 +320,16 @@ var desc = weatherDescriptions[code] default { pt: "Desconhecido", en: "Unknown"
         </ee:transform>
 
         <error-handler>
-            <on-error-continue type="WEATHER:MISSING_CITY" doc:name="Missing city param">
+            <on-error-continue type="WEATHER:MISSING_CITY" doc:name="Missing cities param">
                 <ee:transform>
                     <ee:message>
                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{ error: "MISSING_CITY", message: "Informe o parâmetro 'city', ex: ?city=Sao Paulo" }]]></ee:set-payload>
+{ error: "MISSING_CITIES", message: "Informe o parametro 'cities' separado por virgula, ex: ?cities=Sao Paulo,Rio de Janeiro" }]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
                         <ee:set-variable variableName="httpStatus"><![CDATA[400]]></ee:set-variable>
-                    </ee:variables>
-                </ee:transform>
-            </on-error-continue>
-
-            <on-error-continue type="WEATHER:CITY_NOT_FOUND" doc:name="City not found">
-                <ee:transform>
-                    <ee:message>
-                        <ee:set-payload><![CDATA[%dw 2.0
-output application/json
----
-{ error: "CITY_NOT_FOUND", message: "Cidade nao encontrada: '$(vars.city)'" }]]></ee:set-payload>
-                    </ee:message>
-                    <ee:variables>
-                        <ee:set-variable variableName="httpStatus"><![CDATA[404]]></ee:set-variable>
-                    </ee:variables>
-                </ee:transform>
-            </on-error-continue>
-
-            <on-error-continue type="HTTP:CONNECTIVITY, HTTP:TIMEOUT" doc:name="Upstream unavailable">
-                <ee:transform>
-                    <ee:message>
-                        <ee:set-payload><![CDATA[%dw 2.0
-output application/json
----
-{ error: "UPSTREAM_UNAVAILABLE", message: "Servico de clima temporariamente indisponivel" }]]></ee:set-payload>
-                    </ee:message>
-                    <ee:variables>
-                        <ee:set-variable variableName="httpStatus"><![CDATA[502]]></ee:set-variable>
-                    </ee:variables>
-                </ee:transform>
-            </on-error-continue>
-
-            <on-error-continue type="ANY" doc:name="Unexpected error">
-                <ee:transform>
-                    <ee:message>
-                        <ee:set-payload><![CDATA[%dw 2.0
-output application/json
----
-{ error: "INTERNAL_ERROR", message: "Erro inesperado ao processar a requisicao" }]]></ee:set-payload>
-                    </ee:message>
-                    <ee:variables>
-                        <ee:set-variable variableName="httpStatus"><![CDATA[500]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </on-error-continue>

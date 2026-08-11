@@ -7,11 +7,15 @@ Portfolio demo API built with **Mule 4** (Anypoint / MuleSoft), showing HTTP orc
 `GET /api/weather?city={city name}`
 
 1. **HTTP Listener** receives the request and reads the `city` query param.
-2. **HTTP Request #1** calls Open-Meteo's free geocoding API to resolve the city name into coordinates.
+2. **HTTP Request** calls Open-Meteo's free geocoding API to resolve the city name into coordinates — wrapped in a **Cache scope** (Object Store, 1h TTL) so repeat lookups for the same city skip the upstream call, and an **Until Successful** retry (2 attempts) for transient failures.
 3. **DataWeave** extracts the first match; raises a custom `WEATHER:CITY_NOT_FOUND` error if nothing matched.
-4. **HTTP Request #2** calls Open-Meteo's free forecast API with those coordinates.
-5. **DataWeave** reshapes the response into clean JSON (temperature, wind, a human-readable PT/EN description mapped from the WMO weather code).
+4. **Scatter-Gather**: forecast and air-quality are fetched from Open-Meteo *in parallel*, both keyed off the coordinates resolved above. Air quality is a nice-to-have — if it fails (even after retrying) the response degrades gracefully (`airQuality: null`) instead of failing the whole request.
+5. **DataWeave** reshapes everything into clean JSON (temperature, wind, air quality, a human-readable PT/EN description mapped from the WMO weather code).
 6. An **error handler** turns validation/upstream failures into proper HTTP status codes (400/404/502/500) instead of leaking stack traces.
+
+`GET /api/weather/compare?cities=city1,city2,...`
+
+Runs the exact same resolver above for every city *concurrently* (Mule's Parallel For Each), and returns one result per city — a failure for one city (not found, upstream down) never fails the others; each entry reports its own `ok`/`error` status. Both endpoints share one `resolve-city-weather` sub-flow, so there's no duplicated orchestration logic between them.
 
 No API keys anywhere — [Open-Meteo](https://open-meteo.com) is free and keyless, so there's nothing secret to configure or leak.
 

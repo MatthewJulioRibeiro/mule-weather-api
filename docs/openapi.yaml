@@ -2,10 +2,12 @@ openapi: 3.0.3
 info:
   title: Weather API (Mule 4 demo)
   description: >
-    Portfolio demo built with Mule 4: a single HTTP Listener orchestrates two
-    public, keyless Open-Meteo endpoints (geocoding, then forecast) and
-    reshapes the result with DataWeave 2.0. Source: see the repository this
-    documentation ships with.
+    Portfolio demo built with Mule 4: HTTP Listeners orchestrate public,
+    keyless Open-Meteo endpoints (geocoding, then forecast + air quality in
+    parallel) and reshape the result with DataWeave 2.0. Geocoding results
+    are cached (Object Store, 1h TTL) and upstream calls retry transient
+    failures automatically. Source: see the repository this documentation
+    ships with.
   version: "1.0.0"
   license:
     name: Personal portfolio demo (non-commercial)
@@ -46,6 +48,10 @@ paths:
                   pt: Céu limpo
                   en: Clear sky
                 observedAt: "2026-08-11T14:00"
+                airQuality:
+                  pm10: 6.7
+                  pm2_5: 5.8
+                  europeanAqi: 28
         "400":
           description: Missing the required `city` query param.
           content:
@@ -82,6 +88,63 @@ paths:
               example:
                 error: INTERNAL_ERROR
                 message: Erro inesperado ao processar a requisicao
+  /api/weather/compare:
+    get:
+      summary: Compare current weather across several cities at once
+      description: >
+        Resolves every city in parallel (Mule Parallel For Each) using the
+        same resolver as the single-city endpoint above. A failure for one
+        city (not found, upstream error) never fails the others -- each
+        result reports its own ok/error status.
+      parameters:
+        - name: cities
+          in: query
+          required: true
+          description: Comma-separated city names.
+          schema:
+            type: string
+          example: "Indaiatuba,Sao Paulo,Curitiba"
+      responses:
+        "200":
+          description: >
+            Always 200 once at least one city was provided -- per-city
+            failures are reported inside `results`, not as an HTTP error.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CityResult"
+              example:
+                results:
+                  - city: Indaiatuba
+                    ok: true
+                    error: null
+                    data:
+                      city: Indaiatuba
+                      country: Brazil
+                      coordinates: { latitude: -23.09, longitude: -47.21 }
+                      temperatureCelsius: 24.3
+                      windSpeedKmh: 8.6
+                      description: { pt: Céu limpo, en: Clear sky }
+                      observedAt: "2026-08-11T14:00"
+                      airQuality: { pm10: 6.7, pm2_5: 5.8, europeanAqi: 28 }
+                  - city: Atlantis
+                    ok: false
+                    error: CITY_NOT_FOUND
+                    data: null
+        "400":
+          description: Missing the required `cities` query param.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: MISSING_CITIES
+                message: "Informe o parametro 'cities' separado por virgula, ex: ?cities=Sao Paulo,Rio de Janeiro"
 components:
   schemas:
     WeatherResponse:
@@ -124,6 +187,44 @@ components:
         observedAt:
           type: string
           description: Local timestamp (no timezone offset) as reported by Open-Meteo.
+        airQuality:
+          type: object
+          nullable: true
+          description: >
+            Fetched in parallel with the forecast (Scatter-Gather). Null
+            when the air-quality API failed or timed out -- this
+            enrichment degrades gracefully rather than failing the whole
+            request.
+          properties:
+            pm10:
+              type: number
+            pm2_5:
+              type: number
+            europeanAqi:
+              type: integer
+    CityResult:
+      type: object
+      required:
+        - city
+        - ok
+        - error
+        - data
+      properties:
+        city:
+          type: string
+        ok:
+          type: boolean
+        error:
+          type: string
+          nullable: true
+          enum:
+            - MISSING_CITY
+            - CITY_NOT_FOUND
+            - UPSTREAM_UNAVAILABLE
+            - INTERNAL_ERROR
+        data:
+          $ref: "#/components/schemas/WeatherResponse"
+          nullable: true
     ErrorResponse:
       type: object
       required:
@@ -134,6 +235,7 @@ components:
           type: string
           enum:
             - MISSING_CITY
+            - MISSING_CITIES
             - CITY_NOT_FOUND
             - UPSTREAM_UNAVAILABLE
             - INTERNAL_ERROR

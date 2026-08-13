@@ -145,6 +145,63 @@ paths:
               example:
                 error: MISSING_CITIES
                 message: "Informe o parametro 'cities' separado por virgula, ex: ?cities=Sao Paulo,Rio de Janeiro"
+  /api/geocode:
+    get:
+      summary: Search for a place (country, state, city or neighborhood)
+      description: >
+        Server-side proxy to OpenStreetMap's Nominatim geocoder, reshaped
+        down to city/state/country/neighborhood. Powers the location search
+        box on the portfolio site's demo widget -- Nominatim sends no CORS
+        headers, so a browser can't call it directly, and it requires a
+        custom User-Agent that client-side JS isn't allowed to set anyway.
+        The `city` field of each result is what actually gets sent to
+        /api/weather; the other fields are just for disambiguating the
+        suggestion in the UI.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Free-text search query, at least 3 characters.
+          schema:
+            type: string
+          example: "Vila Madalena"
+      responses:
+        "200":
+          description: Up to 6 matching places, best guess first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GeocodeResult"
+              example:
+                results:
+                  - label: "Vila Madalena, Pinheiros, São Paulo, Região Sudeste, 05434-000, Brasil"
+                    city: São Paulo
+                    state: São Paulo
+                    country: Brasil
+                    neighborhood: Vila Madalena
+        "400":
+          description: The `q` query param is missing or shorter than 3 characters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: QUERY_TOO_SHORT
+                message: "Informe pelo menos 3 caracteres"
+        "502":
+          description: Nominatim is unreachable or timed out.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: UPSTREAM_UNAVAILABLE
+                message: "Servico de busca de localizacao temporariamente indisponivel"
 components:
   schemas:
     WeatherResponse:
@@ -225,6 +282,27 @@ components:
         data:
           $ref: "#/components/schemas/WeatherResponse"
           nullable: true
+    GeocodeResult:
+      type: object
+      required:
+        - label
+        - city
+      properties:
+        label:
+          type: string
+          description: Full human-readable place name, as returned by Nominatim.
+        city:
+          type: string
+          description: What actually gets sent to /api/weather.
+        state:
+          type: string
+          nullable: true
+        country:
+          type: string
+          nullable: true
+        neighborhood:
+          type: string
+          nullable: true
     ErrorResponse:
       type: object
       required:
@@ -239,5 +317,6 @@ components:
             - CITY_NOT_FOUND
             - UPSTREAM_UNAVAILABLE
             - INTERNAL_ERROR
+            - QUERY_TOO_SHORT
         message:
           type: string

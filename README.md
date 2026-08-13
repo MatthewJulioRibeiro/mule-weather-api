@@ -17,6 +17,10 @@ Portfolio demo API built with **Mule 4** (Anypoint / MuleSoft), showing HTTP orc
 
 Runs the exact same resolver above for every city *concurrently* (Mule's Parallel For Each), and returns one result per city — a failure for one city (not found, upstream down) never fails the others; each entry reports its own `ok`/`error` status. Both endpoints share one `resolve-city-weather` sub-flow, so there's no duplicated orchestration logic between them.
 
+`GET /api/geocode?q={free text, 3+ chars}`
+
+Server-side proxy to OpenStreetMap's [Nominatim](https://nominatim.org) geocoder, reshaped down to `{ label, city, state, country, neighborhood }` per result — powers the location search box on the demo widget (country/state/neighborhood-level suggestions), something Open-Meteo's own geocoder doesn't expose. Runs server-side, not client-side, for two reasons: Nominatim's public instance sends no CORS headers so a browser can't call it directly, and it requires a custom `User-Agent` identifying the app, which client-side JS isn't allowed to set anyway. Only the resolved `city` field is what actually goes into `/api/weather` — the rest is just for disambiguating the suggestion in the UI.
+
 No API keys anywhere — [Open-Meteo](https://open-meteo.com) is free and keyless, so there's nothing secret to configure or leak.
 
 ```bash

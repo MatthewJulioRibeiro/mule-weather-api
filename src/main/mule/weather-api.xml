@@ -4,17 +4,30 @@
       xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
       xmlns:os="http://www.mulesoft.org/schema/mule/os"
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:avio-logger="http://www.mulesoft.org/schema/mule/avio-logger"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
         http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
-        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/avio-logger http://www.mulesoft.org/schema/mule/avio-logger/current/mule-avio-logger.xsd">
 
     <!-- Portfolio demo: orchestrates public, keyless Open-Meteo endpoints
          (geocoding -> forecast + air quality in parallel) and reshapes the
          result with DataWeave. Two HTTP endpoints share one resolver
          sub-flow: a single-city lookup and a multi-city parallel compare. -->
+
+    <!-- Structured access logging via AVIO Consulting's open-source (BSD-2)
+         mule-custom-logger connector, a real, recognized connector from the
+         Mule ecosystem (github.com/avioconsulting/mule-custom-logger),
+         Maven Central, no Anypoint Exchange credentials needed, instead of
+         a hand-rolled DataWeave write(). formatAsJson emits one JSON line
+         per request; correlationId defaults to the event's own Mule
+         correlation ID when left unset on the log operation. -->
+    <avio-logger:config name="Access_Logger_Config" doc:name="AVIO Logger Config"
+        applicationName="mule-weather-api" applicationVersion="1.0.0" environment="production"
+        defaultCategory="com.matheusribeiro.weatherapi.access" formatAsJson="true" />
 
     <http:listener-config name="HTTP_Listener_config">
         <http:listener-connection host="0.0.0.0" port="8081" protocol="HTTP" />
@@ -305,8 +318,16 @@ payload.error default "INTERNAL_ERROR"]]></ee:set-variable>
             </otherwise>
         </choice>
 
-        <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
-            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather', request: { city: vars.city default null }, status: vars.httpStatus default 200, error: vars.errorCode default null, response: payload, correlationId: correlationId }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
+        <avio-logger:log doc:name="Access log" config-ref="Access_Logger_Config"
+            message="GET /api/weather" level="INFO">
+            <avio-logger:message-attributes>
+                <avio-logger:attribute key="endpoint" value="/api/weather" />
+                <avio-logger:attribute key="status" value="#[vars.httpStatus default 200 as String]" />
+                <avio-logger:attribute key="error" value="#[vars.errorCode default '']" />
+                <avio-logger:attribute key="request" value="#[write({ city: vars.city default null }, 'application/json', {indent: false})]" />
+                <avio-logger:attribute key="response" value="#[write(payload, 'application/json', {indent: false})]" />
+            </avio-logger:message-attributes>
+        </avio-logger:log>
     </flow>
 
     <flow name="weather-compare-main">
@@ -351,8 +372,16 @@ output application/json
             </ee:variables>
         </ee:transform>
 
-        <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
-            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather/compare', request: { cities: vars.citiesList default [] }, status: vars.httpStatus default 200, error: null, response: payload, correlationId: correlationId }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
+        <avio-logger:log doc:name="Access log" config-ref="Access_Logger_Config"
+            message="GET /api/weather/compare" level="INFO">
+            <avio-logger:message-attributes>
+                <avio-logger:attribute key="endpoint" value="/api/weather/compare" />
+                <avio-logger:attribute key="status" value="#[vars.httpStatus default 200 as String]" />
+                <avio-logger:attribute key="error" value="#['']" />
+                <avio-logger:attribute key="request" value="#[write({ cities: vars.citiesList default [] }, 'application/json', {indent: false})]" />
+                <avio-logger:attribute key="response" value="#[write(payload, 'application/json', {indent: false})]" />
+            </avio-logger:message-attributes>
+        </avio-logger:log>
 
         <error-handler>
             <on-error-continue type="WEATHER:MISSING_CITY" doc:name="Missing cities param">
@@ -368,8 +397,16 @@ output application/json
                     </ee:variables>
                 </ee:transform>
 
-                <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
-                    message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather/compare', request: { cities: vars.citiesList default [] }, status: vars.httpStatus default 200, error: 'MISSING_CITIES', response: payload, correlationId: correlationId }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
+                <avio-logger:log doc:name="Access log" config-ref="Access_Logger_Config"
+                    message="GET /api/weather/compare" level="INFO">
+                    <avio-logger:message-attributes>
+                        <avio-logger:attribute key="endpoint" value="/api/weather/compare" />
+                        <avio-logger:attribute key="status" value="#[vars.httpStatus default 200 as String]" />
+                        <avio-logger:attribute key="error" value="MISSING_CITIES" />
+                        <avio-logger:attribute key="request" value="#[write({ cities: vars.citiesList default [] }, 'application/json', {indent: false})]" />
+                        <avio-logger:attribute key="response" value="#[write(payload, 'application/json', {indent: false})]" />
+                    </avio-logger:message-attributes>
+                </avio-logger:log>
             </on-error-continue>
         </error-handler>
     </flow>
@@ -478,7 +515,15 @@ output application/json
             </otherwise>
         </choice>
 
-        <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
-            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/geocode', request: { q: vars.query default null }, status: vars.httpStatus default 200, error: payload.error default null, response: payload, correlationId: correlationId }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
+        <avio-logger:log doc:name="Access log" config-ref="Access_Logger_Config"
+            message="GET /api/geocode" level="INFO">
+            <avio-logger:message-attributes>
+                <avio-logger:attribute key="endpoint" value="/api/geocode" />
+                <avio-logger:attribute key="status" value="#[vars.httpStatus default 200 as String]" />
+                <avio-logger:attribute key="error" value="#[payload.error default '']" />
+                <avio-logger:attribute key="request" value="#[write({ q: vars.query default null }, 'application/json', {indent: false})]" />
+                <avio-logger:attribute key="response" value="#[write(payload, 'application/json', {indent: false})]" />
+            </avio-logger:message-attributes>
+        </avio-logger:log>
     </flow>
 </mule>

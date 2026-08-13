@@ -65,6 +65,12 @@
             <classifier>mule-plugin</classifier>
         </dependency>
         <dependency>
+            <groupId>com.avioconsulting.mule</groupId>
+            <artifactId>mule-custom-logger</artifactId>
+            <version>3.1.0</version>
+            <classifier>mule-plugin</classifier>
+        </dependency>
+        <dependency>
             <groupId>com.mulesoft.munit</groupId>
             <artifactId>munit-runner</artifactId>
             <version>${munit.version}</version>

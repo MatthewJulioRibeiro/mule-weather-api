@@ -463,19 +463,89 @@ output application/json
                         </http:request>
                     </until-successful>
 
-                    <ee:transform doc:name="Reshape to simple results">
+                    <avio-logger:log doc:name="Log Photon response" config-ref="Access_Logger_Config"
+                        message="Photon search response" level="INFO">
+                        <avio-logger:message-attributes>
+                            <avio-logger:attribute key="step" value="photon-search" />
+                            <avio-logger:attribute key="response" value="#[write(payload, 'application/json', {indent: false})]" />
+                        </avio-logger:message-attributes>
+                    </avio-logger:log>
+
+                    <ee:transform doc:name="Extract matched features">
+                        <ee:variables>
+                            <ee:set-variable variableName="matchedFeatures"><![CDATA[%dw 2.0
+output application/json
+---
+(payload.features map (f) -> {
+    label: [f.properties.name, f.properties.district, f.properties.city, f.properties.state, f.properties.country] filter ($ != null) joinBy ", ",
+    city: f.properties.city default (if (f.properties['type'] == "city") f.properties.name else null),
+    state: f.properties.state default null,
+    country: f.properties.country default null,
+    neighborhood: f.properties.district default (if (f.properties['type'] == "district") f.properties.name else null),
+    longitude: f.geometry.coordinates[0],
+    latitude: f.geometry.coordinates[1]
+}) filter ($.city != null)]]></ee:set-variable>
+                            </ee:variables>
+                    </ee:transform>
+
+                    <!-- Second API call, chained off the FIRST result's own
+                         coordinates (not anything from the client's query
+                         string): attaches a live temperature preview to the
+                         top suggestion using the same Open-Meteo forecast
+                         endpoint the weather flows already call. Purely an
+                         enrichment; if it fails, the geocode results are
+                         still returned without it. -->
+                    <choice doc:name="Any results to enrich?">
+                        <when expression="#[sizeOf(vars.matchedFeatures) > 0]">
+                            <try doc:name="Enrich top result with live weather">
+                                <http:request method="GET" config-ref="Forecast_API_config" path="/forecast" doc:name="Get weather for top result">
+                                    <http:query-params><![CDATA[#[{
+                                        latitude: vars.matchedFeatures[0].latitude,
+                                        longitude: vars.matchedFeatures[0].longitude,
+                                        current: 'temperature_2m,weather_code',
+                                        timezone: 'auto'
+                                    }]]]></http:query-params>
+                                </http:request>
+
+                                <avio-logger:log doc:name="Log forecast enrichment response" config-ref="Access_Logger_Config"
+                                    message="Top-result weather enrichment response" level="INFO">
+                                    <avio-logger:message-attributes>
+                                        <avio-logger:attribute key="step" value="geocode-top-result-weather" />
+                                        <avio-logger:attribute key="response" value="#[write(payload, 'application/json', {indent: false})]" />
+                                    </avio-logger:message-attributes>
+                                </avio-logger:log>
+
+                                <ee:transform doc:name="Attach weather to top result">
+                                    <ee:variables>
+                                        <ee:set-variable variableName="topWeather"><![CDATA[%dw 2.0
+output application/json
+---
+{ temperatureCelsius: payload.current.temperature_2m, weatherCode: payload.current.weather_code }]]></ee:set-variable>
+                                    </ee:variables>
+                                </ee:transform>
+
+                                <error-handler>
+                                    <on-error-continue type="ANY" doc:name="Enrichment is optional">
+                                        <!-- vars.topWeather stays unset; the response just won't carry currentWeather -->
+                                    </on-error-continue>
+                                </error-handler>
+                            </try>
+                        </when>
+                    </choice>
+
+                    <ee:transform doc:name="Build final results payload">
                         <ee:message>
                             <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
 {
-    results: (payload.features map (f) -> {
-        label: [f.properties.name, f.properties.district, f.properties.city, f.properties.state, f.properties.country] filter ($ != null) joinBy ", ",
-        city: f.properties.city default (if (f.properties['type'] == "city") f.properties.name else null),
-        state: f.properties.state default null,
-        country: f.properties.country default null,
-        neighborhood: f.properties.district default (if (f.properties['type'] == "district") f.properties.name else null)
-    }) filter (r) -> r.city != null
+    results: vars.matchedFeatures map ((r, idx) -> {
+        label: r.label,
+        city: r.city,
+        state: r.state,
+        country: r.country,
+        neighborhood: r.neighborhood
+    } ++ (if (idx == 0 and vars.topWeather != null) { currentWeather: vars.topWeather } else {}))
 }]]></ee:set-payload>
                         </ee:message>
                         <ee:variables>

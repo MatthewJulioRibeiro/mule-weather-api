@@ -149,14 +149,16 @@ paths:
     get:
       summary: Search for a place (country, state, city or neighborhood)
       description: >
-        Server-side proxy to OpenStreetMap's Nominatim geocoder, reshaped
-        down to city/state/country/neighborhood. Powers the location search
-        box on the portfolio site's demo widget -- Nominatim sends no CORS
-        headers, so a browser can't call it directly, and it requires a
-        custom User-Agent that client-side JS isn't allowed to set anyway.
-        The `city` field of each result is what actually gets sent to
-        /api/weather; the other fields are just for disambiguating the
-        suggestion in the UI.
+        Server-side proxy to Photon, Komoot's free OpenStreetMap-based
+        autocomplete geocoder, reshaped down to city/state/country/
+        neighborhood. Powers the location search box on the portfolio
+        site's demo widget. Photon was picked over OpenStreetMap's own
+        Nominatim /search specifically because Nominatim doesn't handle
+        partial words typed mid-search well. Runs server-side because
+        Photon's public instance sends no CORS headers, so a browser
+        can't call it directly. The `city` field of each result is
+        what actually gets sent to /api/weather; the other fields are
+        just for disambiguating the suggestion in the UI.
       parameters:
         - name: q
           in: query
@@ -194,7 +196,7 @@ paths:
                 error: QUERY_TOO_SHORT
                 message: "Informe pelo menos 3 caracteres"
         "502":
-          description: Nominatim is unreachable or timed out.
+          description: Photon is unreachable or timed out.
           content:
             application/json:
               schema:
@@ -290,7 +292,7 @@ components:
       properties:
         label:
           type: string
-          description: Full human-readable place name, as returned by Nominatim.
+          description: Full human-readable place name, built from Photon's result.
         city:
           type: string
           description: What actually gets sent to /api/weather.

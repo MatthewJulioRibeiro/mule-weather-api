@@ -240,10 +240,10 @@ output application/json
     <flow name="weather-api-main">
         <http:listener config-ref="HTTP_Listener_config" path="/api/weather" allowedMethods="GET" doc:name="GET /api/weather">
             <http:response statusCode="#[vars.httpStatus default 200]">
-                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Correlation-Id', 'X-Correlation-Id': correlationId}]]]></http:headers>
             </http:response>
             <http:error-response statusCode="#[vars.httpStatus default 500]">
-                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Correlation-Id', 'X-Correlation-Id': correlationId}]]]></http:headers>
             </http:error-response>
         </http:listener>
 
@@ -312,10 +312,10 @@ payload.error default "INTERNAL_ERROR"]]></ee:set-variable>
     <flow name="weather-compare-main">
         <http:listener config-ref="HTTP_Listener_config" path="/api/weather/compare" allowedMethods="GET" doc:name="GET /api/weather/compare">
             <http:response statusCode="#[vars.httpStatus default 200]">
-                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Correlation-Id', 'X-Correlation-Id': correlationId}]]]></http:headers>
             </http:response>
             <http:error-response statusCode="#[vars.httpStatus default 500]">
-                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Correlation-Id', 'X-Correlation-Id': correlationId}]]]></http:headers>
             </http:error-response>
         </http:listener>
 
@@ -384,10 +384,10 @@ output application/json
     <flow name="geocode-search-main">
         <http:listener config-ref="HTTP_Listener_config" path="/api/geocode" allowedMethods="GET" doc:name="GET /api/geocode">
             <http:response statusCode="#[vars.httpStatus default 200]">
-                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Correlation-Id', 'X-Correlation-Id': correlationId}]]]></http:headers>
             </http:response>
             <http:error-response statusCode="#[vars.httpStatus default 500]">
-                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*'}]]]></http:headers>
+                <http:headers><![CDATA[#[{'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'X-Correlation-Id', 'X-Correlation-Id': correlationId}]]]></http:headers>
             </http:error-response>
         </http:listener>
 

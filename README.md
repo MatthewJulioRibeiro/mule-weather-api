@@ -45,10 +45,17 @@ Interactive API docs (Swagger UI, self-hosted, no Anypoint Exchange dependency):
 
 ```
 src/main/mule/weather-api.xml   # the actual Mule flow (HTTP Listener, 2x HTTP Request, DataWeave, error-handler)
+src/main/resources/log4j2.xml   # per-app Log4j2 config -- see Observability below
 pom.xml                          # Maven build -> mule-application package
 Dockerfile                       # multi-stage build: mvn package, then bundled with the Mule runtime
 docker-entrypoint.sh             # starts Mule and streams its log file to stdout for `docker logs`
 ```
+
+## Observability
+
+Every request ends with a `<logger>` writing one structured JSON line (timestamp, endpoint, request params, resolved status) to a dedicated category (`com.matheusribeiro.weatherapi.access`). Mule 4 gives each deployed app its own Log4j2 context, so `src/main/resources/log4j2.xml` defines that category as a separate, non-additive `AsyncLogger` with its own rotated/gzip-compressed file (`weather-api-access.json.log`), kept apart from the general app log (`mule_ee.log`) that `docker-entrypoint.sh` already streams to `docker logs` — that existing routing is preserved untouched, this just adds a second one alongside it.
+
+Right now this writes to a local rotated file inside the container. Shipping it into a central dashboard alongside the ACE currency API's own logs is tracked separately — see [observability-stack](https://github.com/MatthewJulioRibeiro/observability-stack).
 
 ## Running it yourself
 

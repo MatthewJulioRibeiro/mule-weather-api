@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Per-application Log4j2 config (Mule 4 gives each deployed app its own
+    Log4j2 context, keyed off this file when present). Two things happen
+    here:
+
+    1. The existing app-level log output is kept flowing to mule_ee.log,
+       the same file docker-entrypoint.sh already tails for `docker logs`,
+       defined explicitly here (rather than assumed inherited from the
+       runtime's own conf/log4j2.xml) so this file can't accidentally go
+       silent for the existing setup.
+    2. A second, dedicated logger/appender writes one structured JSON line
+       per request to its own file, fed to the flows via a logger
+       component at the end of each request path (success and error).
+       Kept in its own file/category (additivity="false") so it never
+       mixes into the general app log, and Filebeat can tail just this
+       one file to ship to Elasticsearch for the portfolio's public
+       observability dashboard.
+-->
+<Configuration status="WARN">
+    <Appenders>
+        <RollingFile name="AppLogAppender" fileName="${sys:mule.home}/logs/mule_ee.log"
+                     filePattern="${sys:mule.home}/logs/mule_ee-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss,SSS} [%t] %-5p %c{1} - %m%n" />
+            <Policies>
+                <SizeBasedTriggeringPolicy size="20 MB" />
+                <TimeBasedTriggeringPolicy />
+            </Policies>
+            <DefaultRolloverStrategy max="5" />
+        </RollingFile>
+
+        <RollingFile name="AccessLogAppender" fileName="${sys:mule.home}/logs/weather-api-access.json.log"
+                     filePattern="${sys:mule.home}/logs/weather-api-access-%d{yyyy-MM-dd}-%i.json.log.gz">
+            <PatternLayout pattern="%msg%n" />
+            <Policies>
+                <SizeBasedTriggeringPolicy size="20 MB" />
+                <TimeBasedTriggeringPolicy />
+            </Policies>
+            <DefaultRolloverStrategy max="5" />
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <AsyncLogger name="com.matheusribeiro.weatherapi.access" level="INFO" additivity="false">
+            <AppenderRef ref="AccessLogAppender" />
+        </AsyncLogger>
+
+        <AsyncRoot level="INFO">
+            <AppenderRef ref="AppLogAppender" />
+        </AsyncRoot>
+    </Loggers>
+</Configuration>

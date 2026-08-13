@@ -296,6 +296,9 @@ statuses[payload.error] default 500]]></ee:set-variable>
                 </ee:transform>
             </otherwise>
         </choice>
+
+        <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
+            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather', city: vars.city default null, status: vars.httpStatus default 200 }, 'application/json')]" />
     </flow>
 
     <flow name="weather-compare-main">
@@ -355,6 +358,9 @@ output application/json
                 </ee:transform>
             </on-error-continue>
         </error-handler>
+
+        <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
+            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather/compare', cities: vars.citiesList default [], status: vars.httpStatus default 200 }, 'application/json')]" />
     </flow>
 
     <!-- Powers the site's location search box: proxies a free-text query to
@@ -460,5 +466,8 @@ output application/json
                 </try>
             </otherwise>
         </choice>
+
+        <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
+            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/geocode', q: vars.query default null, status: vars.httpStatus default 200 }, 'application/json')]" />
     </flow>
 </mule>

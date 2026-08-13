@@ -34,15 +34,9 @@
 
     <!-- Used only to power the site's location search box (country/state/
          neighborhood-level suggestions); actual weather lookups still go
-         through Open-Meteo's geocoding above, keyed by city name. Photon
-         (Komoot's free OpenStreetMap-based geocoder) was picked over
-         Nominatim's own /search for this specifically because Nominatim's
-         term matching doesn't handle partial words typed mid-search (e.g.
-         "Vila Mad" while the user is still typing "Vila Madalena" matches
-         unrelated places literally named "Mad"); Photon is built for
-         autocomplete and gets it right from the first few characters. -->
-    <http:request-config name="Photon_API_config">
-        <http:request-connection host="photon.komoot.io" port="443" protocol="HTTPS" />
+         through Open-Meteo's geocoding above, keyed by city name. -->
+    <http:request-config name="Nominatim_API_config">
+        <http:request-connection host="nominatim.openstreetmap.org" port="443" protocol="HTTPS" />
     </http:request-config>
 
     <!-- City -> coordinates rarely changes, so geocoding lookups are cached
@@ -358,12 +352,14 @@ output application/json
     </flow>
 
     <!-- Powers the site's location search box: proxies a free-text query to
-         Photon (Komoot's OpenStreetMap-based autocomplete geocoder) and
-         reshapes its GeoJSON results down to city/state/country/neighborhood
-         so the UI can offer country- and even neighborhood-level suggestions,
-         something Open-Meteo's own geocoder (used for the actual weather
-         lookup) doesn't expose. Runs server-side because Photon's public
-         instance sends no CORS headers, so a browser can't call it directly. -->
+         OpenStreetMap's Nominatim geocoder and reshapes its results down to
+         city/state/country/neighborhood so the UI can offer country- and
+         even neighborhood-level suggestions, something Open-Meteo's own
+         geocoder (used for the actual weather lookup) doesn't expose. Runs
+         server-side because Nominatim's public instance sends no CORS
+         headers, so a browser can't call it directly; a custom User-Agent
+         is also required by their usage policy and browsers won't let
+         client-side JS set that header anyway. -->
     <flow name="geocode-search-main">
         <http:listener config-ref="HTTP_Listener_config" path="/api/geocode" allowedMethods="GET" doc:name="GET /api/geocode">
             <http:response statusCode="#[vars.httpStatus default 200]">
@@ -398,12 +394,15 @@ output application/json
                 </ee:transform>
             </when>
             <otherwise>
-                <try doc:name="Search Photon">
+                <try doc:name="Search Nominatim">
                     <until-successful maxRetries="1" millisBetweenRetries="500" doc:name="Retry search">
-                        <http:request method="GET" config-ref="Photon_API_config" path="/api/" doc:name="Photon search">
+                        <http:request method="GET" config-ref="Nominatim_API_config" path="/search" doc:name="Nominatim search">
+                            <http:headers><![CDATA[#[{'User-Agent': 'matheusribeiro-dev-portfolio-demo/1.0 (contact: ribeiromatheusjulio@gmail.com)'}]]]></http:headers>
                             <http:query-params><![CDATA[#[{
                                 q: vars.query,
-                                lang: 'default',
+                                format: 'jsonv2',
+                                addressdetails: '1',
+                                'accept-language': 'pt-BR,pt,en',
                                 limit: '6'
                             }]]]></http:query-params>
                         </http:request>
@@ -415,12 +414,12 @@ output application/json
 output application/json
 ---
 {
-    results: (payload.features map (f) -> {
-        label: [f.properties.name, f.properties.district, f.properties.city, f.properties.state, f.properties.country] filter ($ != null) joinBy ", ",
-        city: f.properties.city default (if (f.properties.type == "city") f.properties.name else null),
-        state: f.properties.state default null,
-        country: f.properties.country default null,
-        neighborhood: f.properties.district default (if (f.properties.type == "district") f.properties.name else null)
+    results: (payload map (r) -> {
+        label: r.display_name,
+        city: r.address.city default r.address.town default r.address.village default r.address.municipality default r.address.suburb default r.name,
+        state: r.address.state default null,
+        country: r.address.country default null,
+        neighborhood: r.address.suburb default r.address.neighbourhood default null
     }) filter (r) -> r.city != null
 }]]></ee:set-payload>
                         </ee:message>

@@ -11,7 +11,7 @@ RUN mvn -q -B clean package -DskipTests
 FROM eclipse-temurin:17-jre-jammy
 ENV MULE_HOME=/opt/mule
 
-RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+RUN apt-get update && apt-get install -y --no-install-recommends unzip curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY runtime/mule-standalone.zip /tmp/mule-standalone.zip

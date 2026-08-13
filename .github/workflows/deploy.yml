@@ -58,5 +58,7 @@ jobs:
               -p 127.0.0.1:8081:8081 \
               --restart unless-stopped \
               --memory=2g \
+              -e INGEST_URL="${{ secrets.INGEST_URL }}" \
+              -e INGEST_TOKEN="${{ secrets.INGEST_TOKEN }}" \
               mule-weather-api
           '

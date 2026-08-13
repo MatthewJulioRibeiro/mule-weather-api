@@ -269,6 +269,10 @@ payload.data]]></ee:set-payload>
                     </ee:message>
                     <ee:variables>
                         <ee:set-variable variableName="httpStatus"><![CDATA[200]]></ee:set-variable>
+                        <ee:set-variable variableName="errorCode"><![CDATA[%dw 2.0
+output application/java
+---
+null]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </when>
@@ -292,13 +296,17 @@ output application/java
 var statuses = { MISSING_CITY: 400, CITY_NOT_FOUND: 404, UPSTREAM_UNAVAILABLE: 502, INTERNAL_ERROR: 500 }
 ---
 statuses[payload.error] default 500]]></ee:set-variable>
+                        <ee:set-variable variableName="errorCode"><![CDATA[%dw 2.0
+output application/java
+---
+payload.error default "INTERNAL_ERROR"]]></ee:set-variable>
                     </ee:variables>
                 </ee:transform>
             </otherwise>
         </choice>
 
         <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
-            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather', city: vars.city default null, status: vars.httpStatus default 200 }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
+            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather', request: { city: vars.city default null }, status: vars.httpStatus default 200, error: vars.errorCode default null, response: payload, correlationId: correlationId }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
     </flow>
 
     <flow name="weather-compare-main">
@@ -344,7 +352,7 @@ output application/json
         </ee:transform>
 
         <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
-            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather/compare', cities: vars.citiesList default [], status: vars.httpStatus default 200 }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
+            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather/compare', request: { cities: vars.citiesList default [] }, status: vars.httpStatus default 200, error: null, response: payload, correlationId: correlationId }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
 
         <error-handler>
             <on-error-continue type="WEATHER:MISSING_CITY" doc:name="Missing cities param">
@@ -361,7 +369,7 @@ output application/json
                 </ee:transform>
 
                 <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
-                    message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather/compare', cities: vars.citiesList default [], status: vars.httpStatus default 200 }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
+                    message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/weather/compare', request: { cities: vars.citiesList default [] }, status: vars.httpStatus default 200, error: 'MISSING_CITIES', response: payload, correlationId: correlationId }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
             </on-error-continue>
         </error-handler>
     </flow>
@@ -471,6 +479,6 @@ output application/json
         </choice>
 
         <logger level="INFO" category="com.matheusribeiro.weatherapi.access" doc:name="Access log"
-            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/geocode', q: vars.query default null, status: vars.httpStatus default 200 }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
+            message="#[write({ ts: now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ss.SSSZ&quot;}, endpoint: '/api/geocode', request: { q: vars.query default null }, status: vars.httpStatus default 200, error: payload.error default null, response: payload, correlationId: correlationId }, 'application/json', {indent: false}) as String {mimeType: 'text/plain'}]" />
     </flow>
 </mule>

@@ -3,6 +3,13 @@ name: Build and deploy
 on:
   push:
     branches: [main]
+    # Docs/tests never touch the deployed jar, but every push here costs a
+    # full rebuild + a live restart -- not worth paying for a README or
+    # MUnit-suite edit alone (see the sibling ace-currency-api repo's
+    # deploy.yml for the same change, motivated by a real 46min ACE
+    # redeploy this project hit from a docs-only push).
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
 
 jobs:

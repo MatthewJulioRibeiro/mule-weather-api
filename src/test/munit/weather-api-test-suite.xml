@@ -11,11 +11,14 @@
 
     <munit:config name="weather-api-test-suite.xml" />
 
-    <!-- Both external calls are mocked: these tests never touch the real
-         Open-Meteo APIs, so they run fast and deterministically in CI. -->
+    <!-- Every external call (Geocoding/Forecast/AirQuality/Photon) is
+         mocked in every test below: these never touch the real Open-Meteo
+         or Photon APIs, so they run fast and deterministically in CI. -->
+
+    <!-- ===================== weather-api-main (/api/weather) ===================== -->
 
     <munit:test name="weather-api-returns-friendly-payload-for-known-city"
-                description="Geocoding + forecast succeed -> clean JSON with description and coordinates">
+                description="Geocoding + forecast + air quality all succeed -> clean JSON with description, coordinates and airQuality">
         <munit:behavior>
             <munit-tools:mock-when processor="http:request" doc:name="Mock geocoding call">
                 <munit-tools:with-attributes>
@@ -36,6 +39,16 @@
                         value='#[{ current: { temperature_2m: 24.3, weather_code: 0, wind_speed_10m: 8.6, time: "2026-08-11T14:00" } }]' />
                 </munit-tools:then-return>
             </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Mock air quality call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="AirQuality_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ current: { pm10: 13.8, pm2_5: 13.6, european_aqi: 36 } }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
         </munit:behavior>
 
         <munit:execution>
@@ -50,6 +63,7 @@
             <munit-tools:assert-that doc:name="City matches" expression="#[payload.city]" is="#[MunitTools::equalTo('Indaiatuba')]" />
             <munit-tools:assert-that doc:name="Description resolved from weather code 0" expression="#[payload.description.en]" is="#[MunitTools::equalTo('Clear sky')]" />
             <munit-tools:assert-that doc:name="Temperature passed through" expression="#[payload.temperatureCelsius]" is="#[MunitTools::equalTo(24.3)]" />
+            <munit-tools:assert-that doc:name="Air quality attached" expression="#[payload.airQuality.europeanAqi]" is="#[MunitTools::equalTo(36)]" />
         </munit:validation>
     </munit:test>
 
@@ -69,7 +83,7 @@
     </munit:test>
 
     <munit:test name="weather-api-returns-404-when-city-not-found"
-                description="Geocoding API returns no matches -> 404 CITY_NOT_FOUND, forecast never called">
+                description="Geocoding API returns no matches -> 404 CITY_NOT_FOUND, forecast/air-quality never called">
         <munit:behavior>
             <munit-tools:mock-when processor="http:request" doc:name="Mock geocoding call with no results">
                 <munit-tools:with-attributes>
@@ -91,6 +105,331 @@
         <munit:validation>
             <munit-tools:assert-that doc:name="Status is 404" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(404)]" />
             <munit-tools:assert-that doc:name="Error code is CITY_NOT_FOUND" expression="#[payload.error]" is="#[MunitTools::equalTo('CITY_NOT_FOUND')]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="weather-api-degrades-to-null-air-quality-when-that-upstream-fails"
+                description="Air quality is enrichment, not core: its failure must not fail the whole request (on-error-continue in resolve-city-weather's scatter-gather route)">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock geocoding call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Geocoding_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ results: [{ name: "Curitiba", country: "Brazil", latitude: -25.42, longitude: -49.27 }] }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Mock forecast call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Forecast_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ current: { temperature_2m: 18.0, weather_code: 3, wind_speed_10m: 5.0, time: "2026-08-11T14:00" } }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Air quality call fails">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="AirQuality_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:CONNECTIVITY" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event doc:name="Set city query param">
+                <munit:attributes value="#[{queryParams: {city: 'Curitiba'}}]" />
+            </munit:set-event>
+            <flow-ref name="weather-api-main" doc:name="Call weather-api-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is still 200" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" />
+            <munit-tools:assert-that doc:name="Forecast still came through" expression="#[payload.temperatureCelsius]" is="#[MunitTools::equalTo(18.0)]" />
+            <munit-tools:assert-that doc:name="Air quality is null, not an error" expression="#[payload.airQuality]" is="#[MunitTools::nullValue()]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="weather-api-returns-502-when-forecast-upstream-unavailable"
+                description="Geocoding succeeds but the forecast call keeps failing -> 502 UPSTREAM_UNAVAILABLE (the whole request fails: unlike air quality, forecast is core data)">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock geocoding call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Geocoding_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ results: [{ name: "Curitiba", country: "Brazil", latitude: -25.42, longitude: -49.27 }] }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Forecast call fails">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Forecast_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:CONNECTIVITY" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Mock air quality call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="AirQuality_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ current: { pm10: 10.0, pm2_5: 8.0, european_aqi: 20 } }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event doc:name="Set city query param">
+                <munit:attributes value="#[{queryParams: {city: 'Curitiba'}}]" />
+            </munit:set-event>
+            <flow-ref name="weather-api-main" doc:name="Call weather-api-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is 502" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(502)]" />
+            <munit-tools:assert-that doc:name="Error code is UPSTREAM_UNAVAILABLE" expression="#[payload.error]" is="#[MunitTools::equalTo('UPSTREAM_UNAVAILABLE')]" />
+        </munit:validation>
+    </munit:test>
+
+    <!-- ===================== weather-health-main (/health) ===================== -->
+
+    <munit:test name="health-endpoint-returns-ok-with-no-upstream-calls"
+                description="Liveness ping replies 200 without touching any external API or the access logger">
+        <munit:execution>
+            <flow-ref name="weather-health-main" doc:name="Call weather-health-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is ok" expression="#[payload.status]" is="#[MunitTools::equalTo('ok')]" />
+        </munit:validation>
+    </munit:test>
+
+    <!-- ===================== weather-compare-main (/api/weather/compare) ===================== -->
+
+    <munit:test name="compare-returns-400-when-cities-param-missing"
+                description="No cities query param -> validation error, no HTTP calls made">
+        <munit:execution>
+            <munit:set-event doc:name="No query params">
+                <munit:attributes value="#[{queryParams: {}}]" />
+            </munit:set-event>
+            <flow-ref name="weather-compare-main" doc:name="Call weather-compare-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is 400" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(400)]" />
+            <munit-tools:assert-that doc:name="Error code is MISSING_CITIES" expression="#[payload.error]" is="#[MunitTools::equalTo('MISSING_CITIES')]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="compare-resolves-multiple-cities-in-parallel"
+                description="Two cities -> one result per city, each carrying its own ok/data shape from resolve-city-weather">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock geocoding call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Geocoding_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ results: [{ name: "City", country: "Brazil", latitude: -23.0, longitude: -47.0 }] }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Mock forecast call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Forecast_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ current: { temperature_2m: 22.0, weather_code: 1, wind_speed_10m: 4.0, time: "2026-08-11T14:00" } }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Mock air quality call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="AirQuality_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ current: { pm10: 10.0, pm2_5: 8.0, european_aqi: 20 } }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event doc:name="Set two cities">
+                <munit:attributes value="#[{queryParams: {cities: 'Sao Paulo,Curitiba'}}]" />
+            </munit:set-event>
+            <flow-ref name="weather-compare-main" doc:name="Call weather-compare-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is 200" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" />
+            <munit-tools:assert-that doc:name="Two results returned" expression="#[sizeOf(payload.results)]" is="#[MunitTools::equalTo(2)]" />
+            <munit-tools:assert-that doc:name="First result ok" expression="#[payload.results[0].ok]" is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:assert-that doc:name="Second result ok" expression="#[payload.results[1].ok]" is="#[MunitTools::equalTo(true)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="compare-isolates-a-failed-city-from-the-rest-of-the-batch"
+                description="Geocoding fails for every city here -> each result is ok:false/CITY_NOT_FOUND, but the batch itself still responds 200 (a bad city never fails the others)">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock geocoding call with no results">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Geocoding_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json" value='#[{ results: [] }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event doc:name="Set one unknown city">
+                <munit:attributes value="#[{queryParams: {cities: 'Nowhereville'}}]" />
+            </munit:set-event>
+            <flow-ref name="weather-compare-main" doc:name="Call weather-compare-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Batch itself is still 200" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" />
+            <munit-tools:assert-that doc:name="The one result is marked failed" expression="#[payload.results[0].ok]" is="#[MunitTools::equalTo(false)]" />
+            <munit-tools:assert-that doc:name="Error code is CITY_NOT_FOUND" expression="#[payload.results[0].error]" is="#[MunitTools::equalTo('CITY_NOT_FOUND')]" />
+        </munit:validation>
+    </munit:test>
+
+    <!-- ===================== geocode-search-main (/api/geocode) ===================== -->
+
+    <munit:test name="geocode-returns-400-when-query-too-short"
+                description="Fewer than 3 characters -> validation error, Photon never called">
+        <munit:execution>
+            <munit:set-event doc:name="Set a 2-char query">
+                <munit:attributes value="#[{queryParams: {q: 'Sa'}}]" />
+            </munit:set-event>
+            <flow-ref name="geocode-search-main" doc:name="Call geocode-search-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is 400" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(400)]" />
+            <munit-tools:assert-that doc:name="Error code is QUERY_TOO_SHORT" expression="#[payload.error]" is="#[MunitTools::equalTo('QUERY_TOO_SHORT')]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="geocode-attaches-live-weather-only-to-the-top-result"
+                description="Multiple Photon matches -> only results[0] (the top match) is enriched with currentWeather from the forecast call, using ITS OWN coordinates">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock Photon search">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Photon_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json" value='#[{
+                        features: [
+                            { properties: { name: "Sao Paulo", city: "Sao Paulo", state: "Sao Paulo", country: "Brasil", type: "city" }, geometry: { coordinates: [-46.63, -23.55] } },
+                            { properties: { name: "Sao Paulo", city: "Amarante do Maranhao", district: "Sao Paulo", country: "Brasil", type: "district" }, geometry: { coordinates: [-46.75, -5.57] } }
+                        ]
+                    }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Mock forecast enrichment call">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Forecast_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json"
+                        value='#[{ current: { temperature_2m: 23.3, weather_code: 1 } }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event doc:name="Set search query">
+                <munit:attributes value="#[{queryParams: {q: 'Sao Paulo'}}]" />
+            </munit:set-event>
+            <flow-ref name="geocode-search-main" doc:name="Call geocode-search-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is 200" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" />
+            <munit-tools:assert-that doc:name="Two results returned" expression="#[sizeOf(payload.results)]" is="#[MunitTools::equalTo(2)]" />
+            <munit-tools:assert-that doc:name="Top result has currentWeather" expression="#[payload.results[0].currentWeather.temperatureCelsius]" is="#[MunitTools::equalTo(23.3)]" />
+            <munit-tools:assert-that doc:name="Second result has no currentWeather key" expression="#[payload.results[1].currentWeather]" is="#[MunitTools::nullValue()]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="geocode-still-returns-results-when-weather-enrichment-fails"
+                description="Photon succeeds but the forecast enrichment call fails -> results are still returned, just without currentWeather (on-error-continue, enrichment is optional)">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request" doc:name="Mock Photon search">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Photon_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/json" value='#[{
+                        features: [
+                            { properties: { name: "Curitiba", city: "Curitiba", state: "Parana", country: "Brasil", type: "city" }, geometry: { coordinates: [-49.27, -25.42] } }
+                        ]
+                    }]' />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+
+            <munit-tools:mock-when processor="http:request" doc:name="Forecast enrichment call fails">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Forecast_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:CONNECTIVITY" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event doc:name="Set search query">
+                <munit:attributes value="#[{queryParams: {q: 'Curitiba'}}]" />
+            </munit:set-event>
+            <flow-ref name="geocode-search-main" doc:name="Call geocode-search-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is still 200" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]" />
+            <munit-tools:assert-that doc:name="Result is still present" expression="#[payload.results[0].city]" is="#[MunitTools::equalTo('Curitiba')]" />
+            <munit-tools:assert-that doc:name="No currentWeather, not an error" expression="#[payload.results[0].currentWeather]" is="#[MunitTools::nullValue()]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="geocode-returns-502-when-photon-upstream-unavailable"
+                description="Photon itself fails -> 502 UPSTREAM_UNAVAILABLE">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request" doc:name="Photon search fails">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="Photon_API_config" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:CONNECTIVITY" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event doc:name="Set search query">
+                <munit:attributes value="#[{queryParams: {q: 'Curitiba'}}]" />
+            </munit:set-event>
+            <flow-ref name="geocode-search-main" doc:name="Call geocode-search-main" />
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-that doc:name="Status is 502" expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(502)]" />
+            <munit-tools:assert-that doc:name="Error code is UPSTREAM_UNAVAILABLE" expression="#[payload.error]" is="#[MunitTools::equalTo('UPSTREAM_UNAVAILABLE')]" />
         </munit:validation>
     </munit:test>
 

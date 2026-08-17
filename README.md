@@ -53,9 +53,19 @@ docker-entrypoint.sh             # starts Mule and streams its log file to stdou
 
 ## Observability
 
-Every request ends with a `<logger>` writing one structured JSON line (timestamp, endpoint, request params, resolved status) to a dedicated category (`com.matheusribeiro.weatherapi.access`). Mule 4 gives each deployed app its own Log4j2 context, so `src/main/resources/log4j2.xml` defines that category as a separate, non-additive `AsyncLogger` with its own rotated/gzip-compressed file (`weather-api-access.json.log`), kept apart from the general app log (`mule_ee.log`) that `docker-entrypoint.sh` already streams to `docker logs` — that existing routing is preserved untouched, this just adds a second one alongside it.
+Every request ends with an [AVIO Consulting `mule-custom-logger`](https://github.com/avioconsulting/mule-custom-logger) call writing one structured JSON line (timestamp, correlationId, endpoint, request/response, resolved status) per request, plus extra step-level checkpoints on `/api/geocode` (Photon search, top-result weather enrichment) sharing the same correlationId. `correlationId` is also returned to the caller as an `X-Correlation-Id` response header.
 
-Right now this writes to a local rotated file inside the container. Shipping it into a central dashboard alongside the ACE currency API's own logs is tracked separately — see [observability-stack](https://github.com/MatthewJulioRibeiro/observability-stack).
+`docker-entrypoint.sh` tails that log and ships each line to the shared observability stack's `/ingest` endpoint (gated on `INGEST_URL`/`INGEST_TOKEN` env vars — the app runs fine standalone/local-only without them). Live in production alongside the ACE currency API's own logs — see [observability-stack](https://github.com/MatthewJulioRibeiro/observability-stack), or the "Ver logs" / "Ver métricas" links on the [portfolio site](https://matheusribeiro.dev.br)'s demo cards for the public Kibana/Grafana views.
+
+## Testing
+
+`src/test/munit/weather-api-test-suite.xml` covers every flow (`/api/weather`, `/api/weather/compare`, `/api/geocode`, `/health`) with every external call (Open-Meteo geocoding/forecast/air-quality, Photon) mocked — deterministic, no real network calls.
+
+```bash
+mvn test
+```
+
+**Known limitation, not chased further**: `pom.xml`'s `discoverRuntimes` is pinned to the free `CE` product, but this app's flows use DataWeave/`ee-core` components (`ee:cache`, `ee:transform`, scatter-gather) that CE's embedded test runtime doesn't ship — running `mvn test` with a plain `discoverRuntimes: CE` config fails on that gap. The real EE distribution is already available locally (`runtime/mule-standalone.zip`, same one the Dockerfile builds from) but pointing MUnit's Maven plugin at an already-installed runtime instead of an auto-downloaded one isn't a documented/supported option in the version used here; the EE-hosted runtime MUnit *can* auto-download requires Nexus credentials tied to a paid MuleSoft support entitlement, which this project (a personal, trial-tier account) doesn't have. So: written and structurally verified, not yet CI-gated. The `docker-compose.local.yml`-built container (parent folder) is the practical way to exercise these flows for real today — see [`test/api-contract-test.mjs`](../ace-currency-api/test/api-contract-test.mjs) in the sibling `ace-currency-api` repo for the same black-box-HTTP-test idea applied there.
 
 ## Running it yourself
 
@@ -67,6 +77,8 @@ Mule's standalone runtime is a licensed binary MuleSoft doesn't allow redistribu
 4. `docker run -p 8081:8081 mule-weather-api`
 
 No Enterprise license is installed or required — the app only uses Community-tier features (HTTP Connector, core DataWeave transforms), so the runtime runs indefinitely, not as a time-boxed trial.
+
+The parent folder's [`docker-compose.local.yml`](../docker-compose.local.yml) builds this app alongside `ace-currency-api` and the full observability stack in one command, wired the same way production is (logs shipped to the same local Elasticsearch) — see that file's header comment for the exact command.
 
 ## Deploy
 

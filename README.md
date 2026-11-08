@@ -97,6 +97,14 @@ mvn test
 
 **Known limitation, not chased further**: `pom.xml`'s `discoverRuntimes` is pinned to the free `CE` product, but this app's flows use DataWeave/`ee-core` components (`ee:cache`, `ee:transform`, scatter-gather) that CE's embedded test runtime doesn't ship — running `mvn test` with a plain `discoverRuntimes: CE` config fails on that gap. The real EE distribution is already available locally (`runtime/mule-standalone.zip`, same one the Dockerfile builds from) but pointing MUnit's Maven plugin at an already-installed runtime instead of an auto-downloaded one isn't a documented/supported option in the version used here; the EE-hosted runtime MUnit *can* auto-download requires Nexus credentials tied to a paid MuleSoft support entitlement, which this project (a personal, trial-tier account) doesn't have. So: written and structurally verified, not yet CI-gated. The `docker-compose.local.yml`-built container (parent folder) is the practical way to exercise these flows for real today — see [`test/api-contract-test.mjs`](../ace-currency-api/test/api-contract-test.mjs) in the sibling `ace-currency-api` repo for the same black-box-HTTP-test idea applied there.
 
+## Builds that don't break overnight
+
+In Nov 2026 the CI started failing with no commit behind it: GitHub refreshed the `ubuntu-latest` runner image, its newer Maven broke `mule-maven-plugin` 4.10.1 (`NoSuchMethodError` in the Maven resolver), while the real build on the VM, which uses the Dockerfile's image, was fine. What changed:
+
+- **No build on the runner's toolchain.** CI runs `docker build --target build`, the Dockerfile's own build stage, so the compile check uses exactly the Maven/JDK the deploy uses. Pinning the runner label (`ubuntu-24.04`) alone isn't enough, because GitHub keeps updating the tools inside that image every week.
+- **Base images pinned by tag and digest** (`maven:3.9.16-eclipse-temurin-17@sha256:...`). A tag can be republished with different contents; a digest can't.
+- **Updates arrive as tested PRs** (`.github/dependabot.yml`): weekly PRs for the Docker images (a new digest behind the same tag counts, so a system-library change inside an image shows up as a PR), the Maven dependencies (Mule Maven plugin, MuleSoft connectors, MUnit) and the GitHub Actions. CI builds every PR without deploying; only `main` deploys.
+
 ## Running it yourself
 
 Mule's standalone runtime is a licensed binary MuleSoft doesn't allow redistributing, so it isn't in this repo. To build the image:

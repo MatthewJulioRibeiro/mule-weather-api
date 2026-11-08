@@ -64,6 +64,15 @@
             <version>1.3.0</version>
             <classifier>mule-plugin</classifier>
         </dependency>
+        <!-- MuleSoft's official MCP Connector: exposes the same weather flows as
+             MCP tools for AI agents (Claude, Cursor, VS Code) at /mcp. Served by
+             the public Anypoint Exchange Maven endpoint (no credentials). -->
+        <dependency>
+            <groupId>com.mulesoft.connectors</groupId>
+            <artifactId>mule-mcp-connector</artifactId>
+            <version>1.7.3</version>
+            <classifier>mule-plugin</classifier>
+        </dependency>
         <dependency>
             <groupId>com.avioconsulting.mule</groupId>
             <artifactId>mule-custom-logger</artifactId>
@@ -91,6 +100,12 @@
             <id>mulesoft-releases</id>
             <name>MuleSoft Releases Repository</name>
             <url>https://repository.mulesoft.org/nexus/content/repositories/releases</url>
+            <layout>default</layout>
+        </repository>
+        <repository>
+            <id>anypoint-exchange-public</id>
+            <name>Anypoint Exchange (public assets)</name>
+            <url>https://maven.anypoint.mulesoft.com/api/v3/maven</url>
             <layout>default</layout>
         </repository>
     </repositories>

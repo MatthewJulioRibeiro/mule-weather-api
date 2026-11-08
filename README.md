@@ -21,6 +21,34 @@ Runs the exact same resolver above for every city *concurrently* (Mule's Paralle
 
 Server-side proxy to [Photon](https://photon.komoot.io), Komoot's free OpenStreetMap-based autocomplete geocoder, reshaped down to `{ label, city, state, country, neighborhood }` per result — powers the location search box on the demo widget (country/state/neighborhood-level suggestions), something Open-Meteo's own geocoder doesn't expose. Photon was picked over OpenStreetMap's own Nominatim `/search` specifically because Nominatim doesn't handle partial words typed mid-search well (e.g. "Vila Mad" while typing "Vila Madalena" matches unrelated places literally named "Mad"); Photon is built for autocomplete and gets it right from the first few characters. Runs server-side, not client-side, because Photon's public instance sends no CORS headers so a browser can't call it directly. Only the resolved `city` field is what actually goes into `/api/weather` — the rest is just for disambiguating the suggestion in the UI.
 
+### `POST /mcp`: the same API as tools for AI agents (MCP)
+
+The weather capability is also served over the [Model Context Protocol](https://modelcontextprotocol.io), so an AI agent (Claude, Cursor, VS Code, a company's own agent) can discover it and call it as tools, using MuleSoft's official **MCP Connector** (`com.mulesoft.connectors:mule-mcp-connector` 1.7.3, Streamable HTTP transport, protocol `2025-06-18`):
+
+| Tool | Arguments | Runs |
+|---|---|---|
+| `get_city_weather` | `city` | the `resolve-city-weather` sub-flow |
+| `compare_cities_weather` | `cities` (2 to 5) | the same sub-flow in a Parallel For Each |
+
+Design choices worth calling out:
+
+- **One orchestration, two front doors.** The tools call the exact sub-flow the REST endpoints use (`src/main/mule/mcp-server.xml`), so caching, retries, graceful degradation and error mapping behave the same for apps and for agents. Nothing is reimplemented for the agent.
+- **Errors an agent can act on.** A city that doesn't resolve comes back as an MCP tool error (`isError: true`) with a plain sentence ("City not found: X. Check the spelling or add the country.") instead of a JSON code the model has to interpret, so the agent can correct itself and retry.
+- **Bounded fan-out.** `compare_cities_weather` is capped at 5 cities by the input schema *and* by a guard in the flow, so a public, keyless endpoint can't be used to multiply upstream calls.
+- **Traceable agent traffic.** Each tool call writes the same structured access-log line as REST calls, plus `mcpSessionId` and a `traceId` (`session/request`). The MCP source's own correlation ID is the JSON-RPC id, which repeats in every session, so it isn't enough to find one call.
+- **Read-only and keyless**, like the REST API; it shares the HTTP listener on 8081, so no new port or proxy route.
+
+Try it from Claude Code:
+
+```bash
+claude mcp add --transport http mule-weather https://mule-demo.matheusribeiro.dev.br/mcp
+# then ask: "Which is warmer right now, Indaiatuba or Campinas?"
+```
+
+`test/mcp-contract-test.mjs` checks the contract the way an agent uses it: initialize, `tools/list`, both tools, a tool error and partial failure. It has no dependencies and works against local or production (`MCP_URL=https://mule-demo.matheusribeiro.dev.br/mcp node test/mcp-contract-test.mjs`).
+
+Licensing note: the MCP Connector declares `requiredProduct: MULE_EE` with `allowsEvaluation: true`. On this demo's unlicensed runtime it runs in evaluation mode, which is fine for a personal, non-commercial demo but would need a MuleSoft subscription in a real deployment.
+
 No API keys anywhere — [Open-Meteo](https://open-meteo.com) is free and keyless, so there's nothing secret to configure or leak.
 
 ```bash
@@ -45,6 +73,8 @@ Interactive API docs (Swagger UI, self-hosted, no Anypoint Exchange dependency):
 
 ```
 src/main/mule/weather-api.xml   # the actual Mule flow (HTTP Listener, 2x HTTP Request, DataWeave, error-handler)
+src/main/mule/mcp-server.xml    # MCP server: the same sub-flow exposed as two agent tools at /mcp
+test/mcp-contract-test.mjs      # black-box MCP contract test (no dependencies)
 src/main/resources/log4j2.xml   # per-app Log4j2 config -- see Observability below
 pom.xml                          # Maven build -> mule-application package
 Dockerfile                       # multi-stage build: mvn package, then bundled with the Mule runtime

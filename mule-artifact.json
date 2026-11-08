@@ -1,5 +1,5 @@
 {
-  "minMuleVersion": "4.9.0",
+  "minMuleVersion": "4.9.6",
   "requiredProduct": "MULE",
-  "configs": ["weather-api.xml"]
+  "configs": ["weather-api.xml", "mcp-server.xml"]
 }

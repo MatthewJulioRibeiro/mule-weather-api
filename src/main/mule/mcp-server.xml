@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:mcp="http://www.mulesoft.org/schema/mule/mcp"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:avio-logger="http://www.mulesoft.org/schema/mule/avio-logger"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/mcp http://www.mulesoft.org/schema/mule/mcp/current/mule-mcp.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/avio-logger http://www.mulesoft.org/schema/mule/avio-logger/current/mule-avio-logger.xsd">
+
+    <!-- The same weather capability, exposed to AI agents over MCP (Model
+         Context Protocol) with MuleSoft's official MCP Connector. An agent
+         (Claude, Cursor, VS Code...) connects to POST /mcp, lists the tools
+         below and calls them; each tool runs the exact same
+         resolve-city-weather sub-flow as the REST endpoints in
+         weather-api.xml, so there's one orchestration and two front doors
+         (REST for apps, MCP for agents), not a parallel implementation.
+         Read-only and keyless, like the REST API. Shares the REST listener
+         (port 8081), so no new port or reverse-proxy route is needed. -->
+    <mcp:server-config name="MCP_Server_config" serverName="mule-weather-api" serverVersion="1.1.0">
+        <mcp:streamable-http-server-connection listenerConfig="HTTP_Listener_config" mcpEndpointPath="/mcp" />
+    </mcp:server-config>
+
+    <flow name="mcp-tool-get-city-weather">
+        <mcp:tool-listener config-ref="MCP_Server_config" name="get_city_weather" doc:name="Tool: get_city_weather">
+            <mcp:description>Current weather and air quality for one city, from Open-Meteo (live data, no API key). Returns temperature in Celsius, wind in km/h, a PT/EN description, the observation time and, when available, PM10, PM2.5 and the European AQI. Use the plain city name, optionally with the country to disambiguate (e.g. "Campinas" or "Paris, France").</mcp:description>
+            <mcp:parameters-schema><![CDATA[{
+  "type": "object",
+  "properties": {
+    "city": { "type": "string", "minLength": 1, "maxLength": 80, "description": "City name, e.g. \"Indaiatuba\"" }
+  },
+  "required": ["city"],
+  "additionalProperties": false
+}]]></mcp:parameters-schema>
+            <mcp:responses>
+                <mcp:text-tool-response-content text="#[write(payload, 'application/json', {indent: false})]" />
+            </mcp:responses>
+            <mcp:on-error-responses>
+                <mcp:text-tool-response-content text="#[error.description]" />
+            </mcp:on-error-responses>
+        </mcp:tool-listener>
+
+        <!-- The MCP source's correlationId is the JSON-RPC id ("n:4"), which
+             repeats in every session; session id + request id is what makes
+             one tool call traceable. Captured before the sub-flow, whose HTTP
+             requests replace the attributes. -->
+        <set-variable variableName="mcpCall" value="#[{ sessionId: attributes.sessionId default '', requestId: attributes.requestId default '' }]" doc:name="MCP session and request id" />
+        <set-variable variableName="city" value="#[trim(payload.city default '')]" doc:name="City from tool arguments" />
+        <flow-ref name="resolve-city-weather" doc:name="Resolve city (same sub-flow as REST)" />
+        <set-variable variableName="result" value="#[payload]" doc:name="Keep result for the log" />
+
+        <avio-logger:log doc:name="Access log" config-ref="Access_Logger_Config" message="MCP get_city_weather" level="INFO">
+            <avio-logger:message-attributes>
+                <avio-logger:attribute key="endpoint" value="mcp:get_city_weather" />
+                <avio-logger:attribute key="status" value="#[if (vars.result.ok) 'ok' else 'tool_error']" />
+                <avio-logger:attribute key="mcpSessionId" value="#[vars.mcpCall.sessionId]" />
+                <avio-logger:attribute key="traceId" value="#[vars.mcpCall.sessionId ++ '/' ++ vars.mcpCall.requestId]" />
+                <avio-logger:attribute key="error" value="#[vars.result.error default '']" />
+                <avio-logger:attribute key="request" value="#[write({ city: vars.city }, 'application/json', {indent: false})]" />
+                <avio-logger:attribute key="response" value="#[write(vars.result, 'application/json', {indent: false})]" />
+            </avio-logger:message-attributes>
+        </avio-logger:log>
+
+        <choice doc:name="Resolved OK?">
+            <when expression="#[vars.result.ok]">
+                <set-payload value="#[vars.result.data]" doc:name="Return the reading" />
+            </when>
+            <otherwise>
+                <!-- A tool error (isError: true) with a sentence the model can
+                     act on, instead of a JSON blob it has to interpret. -->
+                <raise-error type="WEATHER:TOOL_FAILED" doc:name="Tool error"
+                    description="#[{
+                        MISSING_CITY: 'No city given. Pass the city name in the city argument.',
+                        CITY_NOT_FOUND: 'City not found: ' ++ (vars.city default '') ++ '. Check the spelling or add the country.',
+                        UPSTREAM_UNAVAILABLE: 'The weather provider (Open-Meteo) is unavailable right now. Try again in a minute.'
+                    }[vars.result.error] default 'Unexpected error while resolving the weather.']" />
+            </otherwise>
+        </choice>
+    </flow>
+
+    <flow name="mcp-tool-compare-cities-weather">
+        <mcp:tool-listener config-ref="MCP_Server_config" name="compare_cities_weather" doc:name="Tool: compare_cities_weather">
+            <mcp:description>Current weather for 2 to 5 cities at once, resolved in parallel (Mule Parallel For Each). Use it to answer comparisons such as "which is warmer right now, Indaiatuba or Campinas?". A city that fails (not found, provider down) comes back with ok=false and an error code; the others still return.</mcp:description>
+            <mcp:parameters-schema><![CDATA[{
+  "type": "object",
+  "properties": {
+    "cities": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 80 },
+      "minItems": 2,
+      "maxItems": 5,
+      "description": "City names, e.g. [\"Indaiatuba\", \"Campinas\"]"
+    }
+  },
+  "required": ["cities"],
+  "additionalProperties": false
+}]]></mcp:parameters-schema>
+            <mcp:responses>
+                <mcp:text-tool-response-content text="#[write(payload, 'application/json', {indent: false})]" />
+            </mcp:responses>
+            <mcp:on-error-responses>
+                <mcp:text-tool-response-content text="#[error.description]" />
+            </mcp:on-error-responses>
+        </mcp:tool-listener>
+
+        <!-- Same trace id as get_city_weather (see there). -->
+        <set-variable variableName="mcpCall" value="#[{ sessionId: attributes.sessionId default '', requestId: attributes.requestId default '' }]" doc:name="MCP session and request id" />
+        <!-- The schema already limits the list to 5; this guard keeps the
+             public endpoint from fanning out to more upstream calls even if a
+             client skips schema validation. -->
+        <set-variable variableName="citiesList" value="#[(payload.cities default []) map trim($ as String) filter not isEmpty($) filter ($$ &lt; 5)]" doc:name="Cities from tool arguments (max 5)" />
+        <choice doc:name="At least 2 cities?">
+            <when expression="#[sizeOf(vars.citiesList) &lt; 2]">
+                <raise-error type="WEATHER:TOOL_FAILED" description="Pass at least 2 city names in the cities argument." doc:name="Tool error" />
+            </when>
+        </choice>
+
+        <parallel-foreach collection="#[vars.citiesList]" doc:name="Resolve each city in parallel">
+            <set-variable variableName="city" value="#[payload]" doc:name="Set city for this branch" />
+            <flow-ref name="resolve-city-weather" doc:name="Resolve city (same sub-flow as REST)" />
+        </parallel-foreach>
+
+        <set-payload value="#[{ results: payload.payload }]" doc:name="Collect results" />
+
+        <avio-logger:log doc:name="Access log" config-ref="Access_Logger_Config" message="MCP compare_cities_weather" level="INFO">
+            <avio-logger:message-attributes>
+                <avio-logger:attribute key="endpoint" value="mcp:compare_cities_weather" />
+                <avio-logger:attribute key="status" value="ok" />
+                <avio-logger:attribute key="mcpSessionId" value="#[vars.mcpCall.sessionId]" />
+                <avio-logger:attribute key="traceId" value="#[vars.mcpCall.sessionId ++ '/' ++ vars.mcpCall.requestId]" />
+                <avio-logger:attribute key="error" value="#['']" />
+                <avio-logger:attribute key="request" value="#[write({ cities: vars.citiesList }, 'application/json', {indent: false})]" />
+                <avio-logger:attribute key="response" value="#[write(payload, 'application/json', {indent: false})]" />
+            </avio-logger:message-attributes>
+        </avio-logger:log>
+    </flow>
+</mule>

@@ -101,6 +101,32 @@ jobs:
       - name: Build the full image
         run: docker build --progress=plain -t mule-weather-api:ci .
 
+      # Image scan (Trivy). The gate is OS packages with a CRITICAL
+      # vulnerability that already has a fix: those are fixed by moving the
+      # pinned base image, which is what Dependabot's docker PRs do. Java
+      # libraries are reported but don't fail the build: most of them ship
+      # inside the licensed Mule runtime, which this repo can't patch (those
+      # fixes come from MuleSoft's runtime patch releases and security notices).
+      - name: Scan image, OS packages (fails on fixable CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: mule-weather-api:ci
+          vuln-type: os
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Scan image, Java libraries (report only)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: mule-weather-api:ci
+          vuln-type: library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+          format: table
+
       - name: Start Mule and wait for /health
         run: |
           docker run -d --name app -p 8081:8081 --memory=2g mule-weather-api:ci

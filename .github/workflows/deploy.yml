@@ -30,8 +30,17 @@ jobs:
       # Nexus EE credentials tied to a paid Mule support entitlement). The
       # MUnit suite still lives in src/test/munit and runs fine locally
       # against the real runtime on the VM -- see README.md.
-      - name: Build and package (compile check)
-        run: mvn -B package -DskipTests
+      # Built inside the same image the Dockerfile builds with, not with
+      # whatever Maven ubuntu-latest happens to ship: a runner image update
+      # (Aug -> Nov 2026) broke mule-maven-plugin 4.10.1 with a
+      # NoSuchMethodError in the Maven resolver, while the real build on the
+      # VM was fine. Same image = this check tests what actually gets deployed.
+      - name: Build and package (compile check, same image as the Dockerfile)
+        run: |
+          docker run --rm -v "$PWD":/app -v "$HOME/.m2":/root/.m2 -w /app \
+            maven:3.9-eclipse-temurin-17 mvn -B -v
+          docker run --rm -v "$PWD":/app -v "$HOME/.m2":/root/.m2 -w /app \
+            maven:3.9-eclipse-temurin-17 mvn -B package -DskipTests
 
   deploy:
     needs: test

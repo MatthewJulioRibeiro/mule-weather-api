@@ -3,45 +3,138 @@ name: Build and deploy
 on:
   push:
     branches: [main]
-    # Docs/tests never touch the deployed jar, but every push here costs a
-    # full rebuild + a live restart -- not worth paying for a README or
-    # MUnit-suite edit alone (see the sibling ace-currency-api repo's
-    # deploy.yml for the same change, motivated by a real 46min ACE
-    # redeploy this project hit from a docs-only push).
+    # Docs never touch the deployed jar, but every push here costs a full
+    # rebuild + a live restart -- not worth paying for a README edit alone
+    # (see the sibling ace-currency-api repo's deploy.yml for the same change,
+    # motivated by a real 46min ACE redeploy this project hit from a docs-only
+    # push).
     paths-ignore:
       - "**.md"
-  # Every PR (including Dependabot's dependency/image bumps) gets the build
-  # check; only main deploys (see the `if` on the deploy job).
+  # Every PR (including Dependabot's dependency/image bumps) gets the full
+  # check below, with a real Mule runtime; only main deploys.
   pull_request:
+  # Weekly run on main: keeps the runtime cache from expiring (GitHub evicts
+  # caches unused for 7 days) and doubles as a weekly health check.
+  schedule:
+    - cron: "0 9 * * 1"
   workflow_dispatch:
 
+env:
+  # The Mule EE standalone runtime is license-gated: it can't live in this
+  # repo or be downloaded anonymously. A main-branch job copies the exact zip
+  # the VM runs into the Actions cache once; PR jobs (which never see secrets,
+  # Dependabot's included) only restore it. Caches saved on main are readable
+  # from PRs, so no secret ever reaches PR code.
+  MULE_RUNTIME_VERSION: "4.12.2"
+  MULE_RUNTIME_SHA256: "17d024b2a54bf86e704a96fa4571cf16fea7491fc88da5f1f36dc277cd2e862c"
+
 jobs:
+  # Fast fail: the app compiles in the Dockerfile's pinned build stage (same
+  # Maven/JDK as the deploy), not with the runner's own toolchain, which
+  # GitHub refreshes weekly (that refresh broke mule-maven-plugin 4.10.1 in
+  # Nov 2026). MUnit is not run here: its public "CE" test runtime lacks the
+  # ee-core module this flow needs; the integration job below covers the
+  # behaviour against the real runtime instead.
   test:
-    # Exact runner label instead of ubuntu-latest. GitHub still refreshes the
-    # tools inside this image weekly, which is why the build itself does not
-    # use the runner's Maven/JDK at all (next step).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the app in the Dockerfile's pinned build stage
+        run: docker build --target build --progress=plain -t mule-weather-api-build .
+
+  # Puts the runtime zip in the Actions cache (main only: needs the VM's SSH key).
+  runtime-cache:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Restore runtime from cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: runtime/mule-standalone.zip
+          key: mule-ee-standalone-${{ env.MULE_RUNTIME_VERSION }}-${{ env.MULE_RUNTIME_SHA256 }}
+
+      - name: Set up SSH
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MULE_VM_SSH_KEY }}
+
+      - name: Copy the runtime the VM runs, and check it
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.ssh runtime
+          ssh-keyscan -H "${{ secrets.MULE_VM_HOST }}" >> ~/.ssh/known_hosts
+          scp "${{ secrets.MULE_VM_USER }}@${{ secrets.MULE_VM_HOST }}:~/mule-runtime/mule-standalone.zip" runtime/mule-standalone.zip
+          echo "${MULE_RUNTIME_SHA256}  runtime/mule-standalone.zip" | sha256sum -c -
+
+      - name: Save runtime to cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: runtime/mule-standalone.zip
+          key: mule-ee-standalone-${{ env.MULE_RUNTIME_VERSION }}-${{ env.MULE_RUNTIME_SHA256 }}
+
+  # The real check: full image, Mule actually starting, MCP contract and REST
+  # routes answering. A green PR here means "runs", not just "compiles": a
+  # base-image bump to a Java the runtime doesn't support fails here, where
+  # the compile-only check above would pass.
+  integration:
+    needs: [test, runtime-cache]
+    if: >-
+      always() && needs.test.result == 'success' &&
+      (needs.runtime-cache.result == 'success' || needs.runtime-cache.result == 'skipped')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      # MUnit is not run here: the public "CE" test runtime that MUnit
-      # downloads from Maven doesn't ship the DataWeave/ee-core module this
-      # flow depends on (only the licensed EE distribution does, which needs
-      # Nexus EE credentials tied to a paid Mule support entitlement). The
-      # MUnit suite still lives in src/test/munit and runs fine locally
-      # against the real runtime on the VM -- see README.md.
-      # The build runs in the Dockerfile's own build stage, pinned by digest,
-      # not with whatever Maven the runner ships: a runner image update
-      # (Aug -> Nov 2026) broke mule-maven-plugin 4.10.1 with a
-      # NoSuchMethodError in the Maven resolver while the real build on the VM
-      # was fine. One image declaration (the Dockerfile) = CI tests what gets
-      # deployed, and Dependabot has a single place to bump.
-      - name: Build the app in the Dockerfile's pinned build stage
-        run: docker build --target build --progress=plain -t mule-weather-api-build .
+      - name: Restore the Mule runtime (saved by a main-branch run)
+        uses: actions/cache/restore@v4
+        with:
+          path: runtime/mule-standalone.zip
+          key: mule-ee-standalone-${{ env.MULE_RUNTIME_VERSION }}-${{ env.MULE_RUNTIME_SHA256 }}
+          fail-on-cache-miss: true
+
+      - name: Check the runtime is the expected file
+        run: echo "${MULE_RUNTIME_SHA256}  runtime/mule-standalone.zip" | sha256sum -c -
+
+      - name: Build the full image
+        run: docker build --progress=plain -t mule-weather-api:ci .
+
+      - name: Start Mule and wait for /health
+        run: |
+          docker run -d --name app -p 8081:8081 --memory=2g mule-weather-api:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8081/health > /dev/null 2>&1; then
+              echo "Mule up after ~$((i * 5))s"; exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' app)" != "true" ]; then
+              echo "Container stopped"; exit 1
+            fi
+            sleep 5
+          done
+          echo "Mule did not answer /health in 5 minutes"; exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: MCP contract test (protocol, both tools, tool errors)
+        run: node test/mcp-contract-test.mjs
+
+      - name: REST routes answer 200
+        run: |
+          for path in "/api/weather?city=Indaiatuba" "/api/weather/compare?cities=Indaiatuba,Campinas" "/api/geocode?q=Indaia"; do
+            curl -fsS -o /dev/null -w "%{http_code} $path\n" "http://localhost:8081$path"
+          done
+
+      - name: Mule log (on failure)
+        if: failure()
+        run: docker logs app 2>&1 | tail -200 || true
 
   deploy:
-    needs: test
-    if: github.event_name != 'pull_request'
+    needs: integration
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

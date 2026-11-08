@@ -1,5 +1,13 @@
-# Stage 1: package the Mule application into a deployable jar
-FROM maven:3.9-eclipse-temurin-17 AS build
+# Base images are pinned by exact tag AND digest: a tag can be republished with
+# different contents (new system libraries inside), a digest can't. Dependabot
+# (.github/dependabot.yml) opens a PR when the image behind the tag changes,
+# and CI builds that PR, so an image update shows up as a tested PR instead of
+# a build that breaks overnight.
+
+# Stage 1: package the Mule application into a deployable jar. CI runs this
+# same stage (docker build --target build), so the compile check uses exactly
+# the Maven/JDK that the deploy uses.
+FROM maven:3.9.16-eclipse-temurin-17@sha256:1a352420f7aba21f5ad08df31bab55f74c013fb491f1ae8ab1dd7ff9ed698584 AS build
 WORKDIR /app
 COPY pom.xml mule-artifact.json ./
 COPY src ./src
@@ -8,7 +16,7 @@ RUN mvn -q -B clean package -DskipTests
 # Stage 2: bundle the (manually downloaded, license-gated) Mule Standalone
 # Runtime with the built app. The zip is NOT committed to this repo -- see
 # README.md for how to obtain it before building this image.
-FROM eclipse-temurin:17-jre-jammy
+FROM eclipse-temurin:17.0.21_9-jre-jammy@sha256:2a9eb226abb654c9d1f91b53cf638d20cb3abb726d1b18a67909c29515545469
 ENV MULE_HOME=/opt/mule
 
 RUN apt-get update && apt-get install -y --no-install-recommends unzip curl \

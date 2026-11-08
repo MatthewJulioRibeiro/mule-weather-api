@@ -1,0 +1,36 @@
+# Weekly dependency PRs. Nothing updates silently: each bump is a PR, CI builds
+# it (deploy.yml runs on pull_request, without deploying), and it only reaches
+# main and the VM when merged.
+version: 2
+updates:
+  # Base images in the Dockerfile, pinned by tag + digest. A new digest behind
+  # the same tag (the image was rebuilt with newer system libraries) also
+  # opens a PR, so an "internal library" change in the image is tested here
+  # before it can break a deploy.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "deps(docker)"
+
+  # pom.xml: mule-maven-plugin, MuleSoft connectors (HTTP, Object Store, MCP),
+  # MUnit and the custom logger, from the public repositories the pom declares.
+  - package-ecosystem: maven
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(maven)"
+
+  # GitHub Actions used by the workflows (checkout, ssh-agent...).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "deps(actions)"

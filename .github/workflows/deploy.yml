@@ -108,7 +108,7 @@ jobs:
       # inside the licensed Mule runtime, which this repo can't patch (those
       # fixes come from MuleSoft's runtime patch releases and security notices).
       - name: Scan image, OS packages (fails on fixable CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: mule-weather-api:ci
           vuln-type: os
@@ -118,7 +118,7 @@ jobs:
           format: table
 
       - name: Scan image, Java libraries (report only)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: mule-weather-api:ci
           vuln-type: library

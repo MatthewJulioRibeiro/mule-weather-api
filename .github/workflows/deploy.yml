@@ -38,7 +38,7 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the app in the Dockerfile's pinned build stage
         run: docker build --target build --progress=plain -t mule-weather-api-build .
 
@@ -86,7 +86,7 @@ jobs:
       (needs.runtime-cache.result == 'success' || needs.runtime-cache.result == 'skipped')
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore the Mule runtime (saved by a main-branch run)
         uses: actions/cache/restore@v4
@@ -137,7 +137,7 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.10.0

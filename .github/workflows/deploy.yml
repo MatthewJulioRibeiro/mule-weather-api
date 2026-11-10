@@ -162,6 +162,12 @@ jobs:
     needs: integration
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    # One deploy at a time on the VM: a running deploy finishes, and of the
+    # ones waiting behind it only the newest runs (GitHub drops the older
+    # pending ones), so merging several PRs in a row can't overlap restarts.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     env:
       PROD_URL: https://mule-demo.matheusribeiro.dev.br
     steps:

@@ -14,6 +14,15 @@ updates:
       day: monday
     commit-message:
       prefix: "deps(docker)"
+    # Mule 4.12 and the MCP Connector (supportedJavaVersions: ["17"]) run on
+    # Java 17: the first Dependabot round proposed Java 22 for the runtime
+    # image, and Mule didn't start (caught by the integration job). Patches
+    # and new digests of Java 17 still come through. The build image's Java
+    # lives in a tag suffix (maven:3.9.x-eclipse-temurin-17), which an ignore
+    # range can't express reliably; there the compile check is the guard.
+    ignore:
+      - dependency-name: "eclipse-temurin"
+        versions: [">= 18"]
 
   # pom.xml: mule-maven-plugin, MuleSoft connectors (HTTP, Object Store, MCP),
   # MUnit and the custom logger, from the public repositories the pom declares.

@@ -85,7 +85,7 @@ docker-entrypoint.sh             # starts Mule and streams its log file to stdou
 
 Every request ends with an [AVIO Consulting `mule-custom-logger`](https://github.com/avioconsulting/mule-custom-logger) call writing one structured JSON line (timestamp, correlationId, endpoint, request/response, resolved status) per request, plus extra step-level checkpoints on `/api/geocode` (Photon search, top-result weather enrichment) sharing the same correlationId. `correlationId` is also returned to the caller as an `X-Correlation-Id` response header.
 
-`docker-entrypoint.sh` tails that log and ships each line to the shared observability stack's `/ingest` endpoint (gated on `INGEST_URL`/`INGEST_TOKEN` env vars — the app runs fine standalone/local-only without them). Live in production alongside the ACE currency API's own logs — see [observability-stack](https://github.com/MatthewJulioRibeiro/observability-stack), or the "Ver logs" / "Ver métricas" links on the [portfolio site](https://matheusribeiro.dev.br)'s demo cards for the public Kibana/Grafana views.
+The log stays inside the container as a rotated file (`weather-api-access.json.log`). Until August 2026 `docker-entrypoint.sh` also shipped each line to a shared Elasticsearch/Kibana stack ([observability-stack](https://github.com/MatthewJulioRibeiro/observability-stack)); that stack was decommissioned on 2026-08-20 and the shipping code was removed.
 
 ## Testing
 
@@ -103,6 +103,8 @@ In Nov 2026 the CI started failing with no commit behind it: GitHub refreshed th
 
 - **No build on the runner's toolchain.** CI runs `docker build --target build`, the Dockerfile's own build stage, so the compile check uses exactly the Maven/JDK the deploy uses. Pinning the runner label (`ubuntu-24.04`) alone isn't enough, because GitHub keeps updating the tools inside that image every week.
 - **Base images pinned by tag and digest** (`maven:3.9.16-eclipse-temurin-17@sha256:...`). A tag can be republished with different contents; a digest can't.
+- **A green PR means "runs", not just "compiles".** An `integration` job builds the full image, starts the real Mule runtime, runs the MCP contract test and the REST routes, and only then can `main` deploy. The first Dependabot round showed why: a bump of the runtime image to Java 22 passed the compile-only check, because that check never starts Mule. The license-gated runtime zip reaches CI without exposing secrets to PRs: a main-branch job copies the exact file the VM runs (checked by SHA-256) into the Actions cache, and PR jobs, Dependabot's included, only restore it. A weekly scheduled run keeps that cache alive and doubles as a health check.
+- **Vulnerabilities.** Dependabot security updates are on (a PR as soon as an advisory hits a declared dependency, not on the weekly schedule), and the integration job scans the image with Trivy: OS packages with a fixable CRITICAL vulnerability fail the PR (fixed by moving the pinned base image), Java libraries are reported only, since most of them live inside the licensed Mule runtime and get fixed by MuleSoft's own runtime patches.
 - **Updates arrive as tested PRs** (`.github/dependabot.yml`): weekly PRs for the Docker images (a new digest behind the same tag counts, so a system-library change inside an image shows up as a PR), the Maven dependencies (Mule Maven plugin, MuleSoft connectors, MUnit) and the GitHub Actions. CI builds every PR without deploying; only `main` deploys.
 
 ## Running it yourself
@@ -116,8 +118,8 @@ Mule's standalone runtime is a licensed binary MuleSoft doesn't allow redistribu
 
 No Enterprise license is installed or required — the app only uses Community-tier features (HTTP Connector, core DataWeave transforms), so the runtime runs indefinitely, not as a time-boxed trial.
 
-The parent folder's [`docker-compose.local.yml`](../docker-compose.local.yml) builds this app alongside `ace-currency-api` and the full observability stack in one command, wired the same way production is (logs shipped to the same local Elasticsearch) — see that file's header comment for the exact command.
+The parent folder's [`docker-compose.local.yml`](../docker-compose.local.yml) builds this app alongside `ace-currency-api` and the full observability stack in one command, (this app no longer ships its logs to that stack; the `INGEST_URL` the compose file passes is ignored) — see that file's header comment for the exact command.
 
 ## Deploy
 
-`.github/workflows/deploy.yml` builds the Docker image and redeploys it over SSH on every push to `main`, onto a small Oracle Cloud "Always Free" VM. Same CI/CD pattern used on the main portfolio site (GitHub Actions -> deploy on push).
+`.github/workflows/deploy.yml` builds the Docker image and redeploys it over SSH on every push to `main`, onto a small Oracle Cloud "Always Free" VM, then waits for the public `/health` and runs the MCP contract test against production, so a deploy that leaves the site down fails the run. Same CI/CD pattern used on the main portfolio site (GitHub Actions -> deploy on push).

@@ -162,6 +162,8 @@ jobs:
     needs: integration
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    env:
+      PROD_URL: https://mule-demo.matheusribeiro.dev.br
     steps:
       - uses: actions/checkout@v7
 
@@ -191,7 +193,24 @@ jobs:
               -p 127.0.0.1:8081:8081 \
               --restart unless-stopped \
               --memory=2g \
-              -e INGEST_URL="${{ secrets.INGEST_URL }}" \
-              -e INGEST_TOKEN="${{ secrets.INGEST_TOKEN }}" \
               mule-weather-api
           '
+
+      # The integration job proved this commit runs; this proves production
+      # came back with it (container up, nginx/TLS in front, MCP answering).
+      - name: Wait for production /health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS "$PROD_URL/health" > /dev/null 2>&1; then
+              echo "Production up after ~$((i * 5))s"; exit 0
+            fi
+            sleep 5
+          done
+          echo "Production did not answer /health in 5 minutes"; exit 1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: MCP contract test against production
+        run: MCP_URL="$PROD_URL/mcp" node test/mcp-contract-test.mjs

@@ -16,7 +16,7 @@ RUN mvn -q -B clean package -DskipTests
 # Stage 2: bundle the (manually downloaded, license-gated) Mule Standalone
 # Runtime with the built app. The zip is NOT committed to this repo -- see
 # README.md for how to obtain it before building this image.
-FROM eclipse-temurin:17.0.21_9-jre-jammy@sha256:2a9eb226abb654c9d1f91b53cf638d20cb3abb726d1b18a67909c29515545469
+FROM eclipse-temurin:17.0.21.1_2-jre-jammy@sha256:0197d17ef5317724fda570ba2263b5e011fa32663339a880414fdb186884a611
 ENV MULE_HOME=/opt/mule
 
 RUN apt-get update && apt-get install -y --no-install-recommends unzip curl \
